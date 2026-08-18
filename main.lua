@@ -42,8 +42,38 @@ if _G.BetterVoid and _G.BetterVoid.unload then
     end)
 end
 
-local Lib = loadstring(game:HttpGet("https://raw.githubusercontent.com/neaxusxgod-png/INS-ui/main/uilib.min.lua"))()
-Lib = Lib or INSUI or INSui
+local function isMatchaRuntime()
+    if type(Instance) == "nil" then
+        return true
+    end
+
+    if identifyexecutor then
+        local ok, name = pcall(function()
+            return identifyexecutor()
+        end)
+
+        if ok and type(name) == "string" and string.find(string.lower(name), "matcha", 1, true) then
+            return true
+        end
+    end
+
+    return false
+end
+
+local MATCHA_RUNTIME = isMatchaRuntime()
+local Lib
+
+if not MATCHA_RUNTIME then
+    local ok, result = pcall(function()
+        return loadstring(game:HttpGet("https://raw.githubusercontent.com/neaxusxgod-png/INS-ui/main/uilib.min.lua"))()
+    end)
+
+    if ok then
+        Lib = result or INSUI or INSui
+    else
+        warn("Better Void: UI library failed to load; running headless")
+    end
+end
 
 local S = {
     enabled = false,
@@ -368,6 +398,7 @@ local shootAssistToggle
 local autoStompToggle
 local teleportStompToggle
 local notify
+local nativeNotify = getfenv and getfenv(1).notify or nil
 local visualConn
 local visuals = { fov = nil, pool = {}, targets = {} }
 
@@ -727,8 +758,24 @@ end
 
 notify = function(title, text, kind)
     if Lib and Lib.Notify then
-        Lib:Notify(title, text, 2, kind or "info")
+        local ok = pcall(function()
+            Lib:Notify(title, text, 2, kind or "info")
+        end)
+        if ok then
+            return
+        end
     end
+
+    if nativeNotify then
+        local ok = pcall(function()
+            nativeNotify(title, text, 2)
+        end)
+        if ok then
+            return
+        end
+    end
+
+    print("[Better Void] " .. tostring(title) .. ": " .. tostring(text))
 end
 
 local function setEnabled(on)
@@ -877,7 +924,10 @@ local function manualStompOnce()
     return false
 end
 
-local win = Lib:CreateWindow({
+local win
+
+if Lib and Lib.CreateWindow then
+win = Lib:CreateWindow({
     title = "Better Void",
     subtitle = "INS UI",
     size = Vector2.new(620, 430),
@@ -1285,10 +1335,17 @@ info:Info("Keys: V void, Z auto stomp, C teleport stomp, J stomp once, B panic, 
 info:Button("Unload", function()
     S.unload()
 end):SetRisk()
+else
+    notify("Better Void", "Matcha/headless mode. Keys: V void, Z auto stomp, C teleport stomp, J stomp once, B panic, X unload.", "info")
+end
 
 function S.unload()
     S.enabled = false
     S.running = false
+
+    local env = getgenv and getgenv() or _G
+    env.BETTERVOID_LOADER_LOADED = nil
+    env.BETTERVOID_LOADED = nil
 
     if visualConn then
         pcall(function()
@@ -1656,7 +1713,11 @@ if loadedConfig then
     notify("Config", "loaded", "success")
 end
 
-notify("Better Void", "loaded. Press P to toggle the menu.", "success")
+if Lib and Lib.CreateWindow then
+    notify("Better Void", "loaded. Press P to toggle the menu.", "success")
+else
+    notify("Better Void", "loaded in Matcha/headless mode. Use V/Z/C/J/B/M/N/1-6/X hotkeys.", "success")
+end
 end
 
 task.spawn(boot)

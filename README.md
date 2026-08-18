@@ -2,12 +2,12 @@
 
 Files:
 
-- `main.lua` is the INS-ui styled GUI and client-side movement helper.
-- `loader.lua` is the pasteable GitHub raw loader.
+- `main.lua` is the INS-ui styled GUI/client helper. In Matcha it skips INS-ui and runs headless with hotkeys plus Drawing overlays.
+- `loader.lua` is a standalone merged loader with embedded `main.lua`, recreated mon-2d routes for regular executors, and a Matcha-safe path.
 
 ## Controls
 
-- `P` opens and closes the INS-ui menu.
+- `P` opens and closes the INS-ui menu in regular executor UI mode; Matcha runs headless, so use the hotkeys below.
 - `V` toggles the void loop.
 - `Z` toggles Auto stomp by default; change it from the keybind control in the GUI.
 - `C` toggles Teleport stomp by default; change it from the keybind control in the GUI.
@@ -36,10 +36,10 @@ Files:
 
 ## Loadstring
 
-`loader.lua` always loads the GitHub raw copy below. Local edits to `main.lua` will not run through the loader until you update that GitHub file.
+`loader.lua` is now standalone and embeds the local `main.lua` content. Regenerate/update it after editing `main.lua`.
 
 ```lua
-loadstring(game:HttpGet("https://raw.githubusercontent.com/Hungrychud/Bettervoid/main/main.lua"))()
+loadstring(game:HttpGet("https://raw.githubusercontent.com/Hungrychud/Bettervoid/main/loader.lua"))()
 ```
 
 The UI library is loaded from:
