@@ -71,6 +71,8 @@ local S = {
     stompRepeats = 6,
     stompInterval = 0.08,
     lastStompAt = 0,
+    spectateUserId = nil,
+    spectateMode = nil,
     anchorX = nil,
     anchorY = nil,
     anchorZ = nil,
@@ -227,6 +229,13 @@ local function getCamera()
         return nil
     end
 
+    local okCurrent, current = pcall(function()
+        return workspace.CurrentCamera
+    end)
+    if okCurrent and current then
+        return current
+    end
+
     local cam = workspace:FindFirstChildOfClass("Camera")
     if cam then
         return cam
@@ -253,6 +262,10 @@ local function getCharacterRoot(char)
     return char and (char:FindFirstChild("HumanoidRootPart") or char:FindFirstChild("UpperTorso") or char:FindFirstChild("Torso"))
 end
 
+local function getHumanoidRootPart(char)
+    return char and char:FindFirstChild("HumanoidRootPart")
+end
+
 local function isKnocked(char)
     local bodyEffects = char and char:FindFirstChild("BodyEffects")
     local ko = bodyEffects and bodyEffects:FindFirstChild("K.O")
@@ -275,7 +288,7 @@ local function getNearestKnockedTarget(maxRange)
     for _, plr in ipairs(Players:GetPlayers()) do
         if plr.UserId ~= lp.UserId then
             local char = plr.Character
-            local root = getCharacterRoot(char)
+            local root = getHumanoidRootPart(char)
             if root and isKnocked(char) then
                 local delta = root.Position - localPos
                 local dist
@@ -411,6 +424,254 @@ local function stopVoid(reason)
     notify("Better Void", reason or "disabled", "warning")
 end
 
+local PLAYER_ROW_COUNT = 32
+local playerRows = {}
+
+local function getPlayerByUserId(userId)
+    if not userId then
+        return nil
+    end
+
+    for _, plr in ipairs(Players:GetPlayers()) do
+        if plr.UserId == userId then
+            return plr
+        end
+    end
+
+    return nil
+end
+
+local function getPlayerDisplayName(plr)
+    local ok, displayName = pcall(function()
+        return plr.DisplayName
+    end)
+
+    if ok and type(displayName) == "string" and displayName ~= "" then
+        return displayName
+    end
+
+    return plr and plr.Name or "?"
+end
+
+local function getPlayerTeamName(plr)
+    local ok, team = pcall(function()
+        return plr.Team
+    end)
+
+    if ok and team then
+        return team.Name or tostring(team)
+    end
+
+    return "-"
+end
+
+local function getCharacterHumanoid(char)
+    return char and char:FindFirstChildOfClass("Humanoid")
+end
+
+local function getLocalHumanoid()
+    return getCharacterHumanoid(lp and lp.Character)
+end
+
+local function getPlayerDistance(targetRoot)
+    local localRoot = getRoot()
+    if not localRoot or not targetRoot then
+        return nil
+    end
+
+    return math.floor((targetRoot.Position - localRoot.Position).Magnitude)
+end
+
+local function isMatchaExecutor()
+    if not identifyexecutor then
+        return false
+    end
+
+    local ok, name = pcall(function()
+        return identifyexecutor()
+    end)
+
+    return ok and type(name) == "string" and string.find(string.lower(name), "matcha", 1, true) ~= nil
+end
+
+local function refreshPlayerRows()
+    local list = {}
+
+    for _, plr in ipairs(Players:GetPlayers()) do
+        list[#list + 1] = {
+            userId = plr.UserId,
+            name = plr.Name
+        }
+    end
+
+    table.sort(list, function(a, b)
+        return string.lower(a.name) < string.lower(b.name)
+    end)
+
+    playerRows = list
+end
+
+local function getPlayerAtRow(index)
+    local row = playerRows[index]
+    return row and getPlayerByUserId(row.userId) or nil
+end
+
+local function describePlayerRow(index)
+    local plr = getPlayerAtRow(index)
+    if not plr then
+        return string.format("%02d. empty", index)
+    end
+
+    local char = plr.Character
+    local hum = getCharacterHumanoid(char)
+    local root = getHumanoidRootPart(char)
+    local displayName = getPlayerDisplayName(plr)
+    local username = plr.Name or "?"
+    local userId = plr.UserId or 0
+    local team = getPlayerTeamName(plr)
+    local health = hum and math.floor(hum.Health) or "no humanoid"
+    local distance = getPlayerDistance(root)
+    local distanceText = distance and tostring(distance) .. "m" or "-"
+    local state = "ready"
+
+    if not char then
+        state = "no character"
+    elseif not hum then
+        state = "no humanoid"
+    elseif hum.Health <= 0 then
+        state = "dead"
+    elseif not root then
+        state = "no HumanoidRootPart"
+    end
+
+    return string.format(
+        "%02d. %s | @%s | ID %s | Team %s | HP %s | Dist %s | %s",
+        index,
+        displayName,
+        username,
+        tostring(userId),
+        team,
+        tostring(health),
+        distanceText,
+        state
+    )
+end
+
+local function teleportToPlayer(index)
+    local plr = getPlayerAtRow(index)
+    if not plr then
+        return false, "row is empty"
+    end
+
+    local char = plr.Character
+    local targetRoot = getHumanoidRootPart(char)
+    local root = getRoot()
+
+    if not char then
+        return false, plr.Name .. " has no character"
+    end
+
+    if not targetRoot then
+        return false, plr.Name .. " has no HumanoidRootPart"
+    end
+
+    if not root then
+        return false, "your HumanoidRootPart is missing"
+    end
+
+    if S.enabled then
+        setEnabled(false)
+        if toggle and toggle.Set then
+            pcall(function()
+                toggle:Set(false)
+            end)
+        end
+    end
+
+    pcall(function()
+        root.CFrame = CFrame.new(targetRoot.Position + Vector3.new(0, 3, 0))
+        root.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
+        root.CanCollide = true
+    end)
+
+    return true, plr.Name
+end
+
+local function spectatePlayer(index)
+    local plr = getPlayerAtRow(index)
+    if not plr then
+        return false, "row is empty"
+    end
+
+    local hum = getCharacterHumanoid(plr.Character)
+    if not hum then
+        return false, plr.Name .. " has no Humanoid"
+    end
+
+    if hum.Health <= 0 then
+        return false, plr.Name .. " is dead"
+    end
+
+    local cam = getCamera()
+    if not cam then
+        return false, "camera missing"
+    end
+
+    if isMatchaExecutor() then
+        S.spectateUserId = plr.UserId
+        S.spectateMode = "follow"
+        return true, plr.Name
+    end
+
+    local ok, err = pcall(function()
+        cam.CameraSubject = hum
+    end)
+
+    if not ok then
+        return false, err
+    end
+
+    S.spectateUserId = plr.UserId
+    S.spectateMode = "subject"
+    return true, plr.Name
+end
+
+local function stopSpectating()
+    local hum = getLocalHumanoid()
+    local cam = getCamera()
+    S.spectateUserId = nil
+    S.spectateMode = nil
+
+    if not hum then
+        return false, "your Humanoid is missing"
+    end
+
+    if not cam then
+        return false, "camera missing"
+    end
+
+    if isMatchaExecutor() then
+        local root = getRoot()
+        if not root then
+            return false, "your HumanoidRootPart is missing"
+        end
+
+        local ok, err = pcall(function()
+            local focus = root.Position + Vector3.new(0, 2, 0)
+            local pos = root.Position + Vector3.new(0, 5, 12)
+            cam.CFrame = CFrame.lookAt(pos, focus)
+        end)
+
+        return ok, err
+    end
+
+    local ok, err = pcall(function()
+        cam.CameraSubject = hum
+    end)
+
+    return ok, err
+end
+
 local win = Lib:CreateWindow({
     title = "Better Void",
     subtitle = "INS UI",
@@ -440,9 +701,66 @@ end
 
 local voidTab = win:Tab("Void", "shield")
 local shootingTab = win:Tab("Shooting", "crosshair")
+local playersTab = win:Tab("Players", "users")
 local settingsTab = win:Tab("Settings", "cog")
 local controls = voidTab:Section("Controls", "Left", "stable void loop")
 local shootingControls = shootingTab:Section("Controls", "Left", "shooting while roaming")
+local playerListSection = playersTab:Section("Player table", "Left", "live server players")
+local playerActionSection = playersTab:Section("Actions", "Right", "row buttons")
+
+refreshPlayerRows()
+
+playerListSection:Label(function()
+    return "Players: " .. tostring(#playerRows) .. " / slots " .. tostring(PLAYER_ROW_COUNT)
+end)
+playerListSection:Info("Rows auto-refresh. Teleport stops Better Void first so the void loop cannot pull you back.")
+
+playerActionSection:Button("Refresh", function()
+    refreshPlayerRows()
+    notify("Players", "refreshed", "success")
+end)
+
+playerActionSection:Button("Stop Spectating", function()
+    local ok, err = stopSpectating()
+    if ok then
+        notify("Spectate", "returned to your character", "success")
+    else
+        notify("Spectate", tostring(err), "warning")
+    end
+end)
+playerActionSection:Label(function()
+    local plr = getPlayerByUserId(S.spectateUserId)
+    if not plr then
+        return "Spectating: none"
+    end
+
+    return "Spectating: " .. tostring(plr.Name) .. " (" .. tostring(S.spectateMode or "subject") .. ")"
+end)
+
+for rowIndex = 1, PLAYER_ROW_COUNT do
+    playerListSection:Label(function()
+        return describePlayerRow(rowIndex)
+    end)
+
+    playerActionSection:Divider("Row " .. tostring(rowIndex))
+    playerActionSection:Button("Teleport " .. tostring(rowIndex), function()
+        local ok, result = teleportToPlayer(rowIndex)
+        if ok then
+            notify("Teleport", "moved to " .. tostring(result), "success")
+        else
+            notify("Teleport", tostring(result), "warning")
+        end
+    end)
+
+    playerActionSection:Button("Spectate " .. tostring(rowIndex), function()
+        local ok, result = spectatePlayer(rowIndex)
+        if ok then
+            notify("Spectate", "watching " .. tostring(result), "success")
+        else
+            notify("Spectate", tostring(result), "warning")
+        end
+    end)
+end
 
 toggle = controls:Toggle("Better Void", false, function(on)
     setEnabled(on)
@@ -720,6 +1038,49 @@ function S.unload()
 
     _G.BetterVoid = nil
 end
+
+task.spawn(function()
+    while S.running do
+        refreshPlayerRows()
+        task.wait(0.5)
+    end
+end)
+
+task.spawn(function()
+    while S.running do
+        local spectateUserId = S.spectateUserId
+
+        if spectateUserId then
+            local plr = getPlayerByUserId(spectateUserId)
+            local char = plr and plr.Character
+            local hum = getCharacterHumanoid(char)
+            local root = getHumanoidRootPart(char)
+            local cam = getCamera()
+
+            if plr and hum and hum.Health > 0 and root and cam then
+                if S.spectateMode == "follow" then
+                    pcall(function()
+                        local focus = root.Position + Vector3.new(0, 2, 0)
+                        local pos = root.Position - (root.CFrame.LookVector * 12) + Vector3.new(0, 5, 0)
+                        cam.CFrame = CFrame.lookAt(pos, focus)
+                    end)
+                    task.wait(0.05)
+                else
+                    if not isMatchaExecutor() then
+                        pcall(function()
+                            cam.CameraSubject = hum
+                        end)
+                    end
+                    task.wait(0.5)
+                end
+            else
+                task.wait(0.25)
+            end
+        else
+            task.wait(0.25)
+        end
+    end
+end)
 
 task.spawn(function()
     local lastV = false
