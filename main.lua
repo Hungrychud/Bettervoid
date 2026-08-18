@@ -60,7 +60,6 @@ local S = {
     shootAssistHeight = 3,
     shootAssistUntil = 0,
     magDump = false,
-    magDumpDelay = 0.001,
     magDumping = false,
     anchorX = nil,
     anchorY = nil,
@@ -86,8 +85,7 @@ local CONFIG_KEYS = {
     "returnHeight",
     "shootAssist",
     "shootAssistHeight",
-    "magDump",
-    "magDumpDelay"
+    "magDump"
 }
 
 local function ensureConfigFolder()
@@ -165,7 +163,6 @@ local function loadConfig(slot)
     S.roamSpeed = math.max(1, math.min(40, S.roamSpeed))
     S.returnHeight = math.max(0, math.min(50, S.returnHeight))
     S.shootAssistHeight = math.max(0, math.min(50, S.shootAssistHeight))
-    S.magDumpDelay = math.max(0.001, math.min(0.2, S.magDumpDelay))
 
     return true
 end
@@ -310,41 +307,28 @@ local function startMagDump()
             task.wait(0.03)
         end
 
-        for i = 1, shotCount do
-            if not S.running or not S.enabled or not S.magDump then
-                break
-            end
-
-            local origin = (handle.CFrame * offset).Position
-            local muzzle = tool:FindFirstChild("Default") and tool.Default:FindFirstChild("Mesh") and tool.Default.Mesh:FindFirstChild("Muzzle")
-            if muzzle then
-                origin = muzzle.WorldPosition
-            end
-
-            if tool.Name == "[Double-Barrel SG]" or tool.Name == "[TacticalShotgun]" then
-                local pellets = {}
-                for _ = 1, 5 do
-                    local hit, pos, normal, aim = castShot(origin, range.Value, 0.1)
-                    pellets[#pellets + 1] = {
-                        AimPosition = aim,
-                        Result1 = hit,
-                        Result2 = pos,
-                        Result3 = normal
-                    }
-                end
-
-                mainRemote:FireServer("ShootGun", handle, origin, pellets, nil, nil, nil, range.Value, damage.Value)
-            else
-                local hit, pos, normal = castShot(origin, range.Value, 0)
-                mainRemote:FireServer("ShootGun", handle, origin, nil, hit, pos, normal, range.Value, damage.Value)
-            end
-
-            if S.magDumpDelay > 0.001 then
-                task.wait(S.magDumpDelay)
-            elseif i % 8 == 0 then
-                task.wait()
-            end
+        local origin = (handle.CFrame * offset).Position
+        local muzzle = tool:FindFirstChild("Default") and tool.Default:FindFirstChild("Mesh") and tool.Default.Mesh:FindFirstChild("Muzzle")
+        if muzzle then
+            origin = muzzle.WorldPosition
         end
+
+        local isShotgun = tool.Name == "[Double-Barrel SG]" or tool.Name == "[TacticalShotgun]"
+        local packedShots = {}
+        local totalShots = isShotgun and shotCount * 5 or shotCount
+        local spread = isShotgun and 0.1 or 0.015
+
+        for i = 1, totalShots do
+            local hit, pos, normal, aim = castShot(origin, range.Value, spread)
+            packedShots[#packedShots + 1] = {
+                AimPosition = aim,
+                Result1 = hit,
+                Result2 = pos,
+                Result3 = normal
+            }
+        end
+
+        mainRemote:FireServer("ShootGun", handle, origin, packedShots, nil, nil, nil, range.Value, damage.Value)
 
         if cooldown and oldCooldown then
             pcall(function()
@@ -523,11 +507,6 @@ magDumpToggle = shootingControls:Toggle("Mag dump", S.magDump, function(on)
     saveConfig()
 end)
 
-shootingControls:Slider("Dump delay", S.magDumpDelay, 0.001, 0.001, 0.2, "s", function(v)
-    S.magDumpDelay = math.max(0.001, v)
-    saveConfig()
-end)
-
 controls:Divider("Presets")
 
 controls:Button("Above map", function()
@@ -670,9 +649,6 @@ info:Label(function()
 end)
 info:Label(function()
     return "Mag dump: " .. (S.magDump and "ON" or "OFF")
-end)
-info:Label(function()
-    return "Dump delay: " .. tostring(S.magDumpDelay) .. "s"
 end)
 info:Label(function()
     local root = getRoot()
