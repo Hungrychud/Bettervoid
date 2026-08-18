@@ -68,6 +68,9 @@ local S = {
     stompDelay = 0.35,
     lastStompAt = 0,
     selectedPlayer = nil,
+    stickToTarget = false,
+    stickHeight = 2,
+    stickBehind = 0,
     anchorX = nil,
     anchorY = nil,
     anchorZ = nil,
@@ -95,7 +98,10 @@ local CONFIG_KEYS = {
     "autoStomp",
     "stompRange",
     "stompHeight",
-    "stompDelay"
+    "stompDelay",
+    "stickToTarget",
+    "stickHeight",
+    "stickBehind"
 }
 
 local function ensureConfigFolder()
@@ -176,6 +182,8 @@ local function loadConfig(slot)
     S.stompRange = math.max(10, math.min(1000, S.stompRange))
     S.stompHeight = math.max(0, math.min(8, S.stompHeight))
     S.stompDelay = math.max(0.1, math.min(2, S.stompDelay))
+    S.stickHeight = math.max(0, math.min(15, S.stickHeight))
+    S.stickBehind = math.max(-10, math.min(10, S.stickBehind))
 
     return true
 end
@@ -215,6 +223,46 @@ end
 
 local function getCharacterRoot(char)
     return char and (char:FindFirstChild("HumanoidRootPart") or char:FindFirstChild("UpperTorso") or char:FindFirstChild("Torso"))
+end
+
+local function getSelectedPlayer()
+    if not S.selectedPlayer then
+        return nil
+    end
+
+    for _, plr in ipairs(Players:GetPlayers()) do
+        if plr.Name == S.selectedPlayer then
+            return plr
+        end
+    end
+
+    return nil
+end
+
+local function getSelectedTargetRoot()
+    local plr = getSelectedPlayer()
+    local char = plr and plr.Character
+    return getCharacterRoot(char), plr
+end
+
+local function teleportToSelectedTarget()
+    local root = getRoot()
+    local targetRoot = getSelectedTargetRoot()
+
+    if not root or not targetRoot then
+        return false
+    end
+
+    local targetCf = targetRoot.CFrame
+    local pos = targetRoot.Position + Vector3.new(0, S.stickHeight, 0) - targetCf.LookVector * S.stickBehind
+
+    pcall(function()
+        root.CFrame = CFrame.new(pos, targetRoot.Position)
+        root.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
+        root.CanCollide = false
+    end)
+
+    return true
 end
 
 local function isKnocked(char)
@@ -401,9 +449,9 @@ local settingsTab = win:Tab("Settings", "cog")
 local controls = voidTab:Section("Controls", "Left", "stable void loop")
 local shootingControls = shootingTab:Section("Controls", "Left", "shooting while roaming")
 local playerListSection = playersTab:Section("Player table", "Left", "live players")
-local playerInfoSection = playersTab:Section("Target", "Right", "selected player")
+local playerInfoSection = playersTab:Section("Options", "Right", "target settings")
 
-local function getPlayerByIndex(index)
+local function getPlayersSorted()
     local list = {}
 
     for _, plr in ipairs(Players:GetPlayers()) do
@@ -414,49 +462,135 @@ local function getPlayerByIndex(index)
         return a.Name < b.Name
     end)
 
-    return list[index], #list
+    return list
 end
 
 playerListSection:Label(function()
     return "Players in server: " .. tostring(#Players:GetPlayers())
 end)
 
-for i = 1, 32 do
-    playerListSection:Label(function()
-        local plr = getPlayerByIndex(i)
-        if not plr then
-            return tostring(i) .. ". -"
-        end
+local function addPlayerActions(plr)
+    local label = plr.Name
+    if plr.UserId == lp.UserId then
+        label = label .. " (you)"
+    end
 
+    playerListSection:Divider(label)
+
+    playerListSection:Label(function()
         local char = plr.Character
         local root = getCharacterRoot(char)
         local localRoot = getRoot()
         local dist = root and localRoot and math.floor((root.Position - localRoot.Position).Magnitude) or "?"
         local ko = isKnocked(char) and " KO" or ""
-        local you = plr.UserId == lp.UserId and " (you)" or ""
-
-        return tostring(i) .. ". " .. plr.Name .. you .. " [" .. tostring(dist) .. "m]" .. ko
+        return label .. " [" .. tostring(dist) .. "m]" .. ko
     end)
-end
 
-for i = 1, 10 do
-    playerInfoSection:Button("Target row " .. tostring(i), function()
-        local plr = getPlayerByIndex(i)
-        if plr then
+    playerListSection:Button(plr.Name, function()
+        if plr.Parent then
             S.selectedPlayer = plr.Name
             notify("Target", "selected " .. plr.Name, "success")
         else
-            notify("Target", "no player in row " .. tostring(i), "warning")
+            notify("Target", plr.Name .. " left", "warning")
+        end
+    end)
+
+    playerListSection:Button("Teleport " .. plr.Name, function()
+        if plr.Parent then
+            S.selectedPlayer = plr.Name
+            if teleportToSelectedTarget() then
+                notify("Target", "teleported to " .. plr.Name, "success")
+            else
+                notify("Target", "target has no body", "warning")
+            end
+        else
+            notify("Target", plr.Name .. " left", "warning")
+        end
+    end)
+
+    playerListSection:Button("Stick " .. plr.Name, function()
+        if plr.Parent then
+            S.selectedPlayer = plr.Name
+            S.stickToTarget = true
+            if teleportToSelectedTarget() then
+                notify("Target", "sticking to " .. plr.Name, "success")
+            else
+                notify("Target", "target has no body", "warning")
+            end
+        else
+            notify("Target", plr.Name .. " left", "warning")
         end
     end)
 end
 
+for _, plr in ipairs(getPlayersSorted()) do
+    addPlayerActions(plr)
+end
+
+playerListSection:Button("Refresh players", function()
+    notify("Players", "reload script to rebuild player buttons", "info")
+end)
+
 playerInfoSection:Label(function()
     return "Selected: " .. tostring(S.selectedPlayer or "none")
+end)
+playerInfoSection:Label(function()
+    return "Stick: " .. (S.stickToTarget and "ON" or "OFF")
+end)
+
+playerInfoSection:Label(function()
+    local plr
+    for _, item in ipairs(Players:GetPlayers()) do
+        if item.Name == S.selectedPlayer then
+            plr = item
+            break
+        end
+    end
+
+    if not plr then
+        return "Target status: none"
+    end
+
+    local char = plr.Character
+    return "Target status: " .. (isKnocked(char) and "KO" or "active")
+end)
+
+playerInfoSection:Button("Teleport selected", function()
+    if teleportToSelectedTarget() then
+        notify("Target", "teleported to " .. tostring(S.selectedPlayer), "success")
+    else
+        notify("Target", "select a valid player first", "warning")
+    end
+end)
+
+playerInfoSection:Button("Stick selected", function()
+    S.stickToTarget = true
+    if teleportToSelectedTarget() then
+        notify("Target", "sticking to " .. tostring(S.selectedPlayer), "success")
+    else
+        S.stickToTarget = false
+        notify("Target", "select a valid player first", "warning")
+    end
+end)
+
+playerInfoSection:Button("Stop sticking", function()
+    S.stickToTarget = false
+    notify("Target", "stick stopped", "warning")
+end)
+
+playerInfoSection:Slider("Stick height", S.stickHeight, 0.5, 0, 15, " studs", function(v)
+    S.stickHeight = math.max(0, v)
+    saveConfig()
+end)
+
+playerInfoSection:Slider("Stick behind", S.stickBehind, 0.5, -10, 10, " studs", function(v)
+    S.stickBehind = v
+    saveConfig()
 end)
 
 playerInfoSection:Button("Clear target", function()
     S.selectedPlayer = nil
+    S.stickToTarget = false
     notify("Target", "cleared", "warning")
 end)
 
@@ -754,6 +888,20 @@ end)
 
 task.spawn(function()
     while S.running do
+        if S.stickToTarget then
+            if not teleportToSelectedTarget() then
+                S.stickToTarget = false
+                notify("Target", "stick stopped; target missing", "warning")
+            end
+            task.wait(0.08)
+        else
+            task.wait(0.2)
+        end
+    end
+end)
+
+task.spawn(function()
+    while S.running do
         if S.autoStomp then
             local now = tick()
             if now - S.lastStompAt >= S.stompDelay then
@@ -771,7 +919,7 @@ end)
 
 task.spawn(function()
     while S.running do
-        if S.enabled then
+        if S.enabled and not S.stickToTarget then
             local root = getRoot()
 
             if root then
