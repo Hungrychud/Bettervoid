@@ -73,7 +73,8 @@ local S = {
 }
 
 local CONFIG_FOLDER = "BetterVoid"
-local CONFIG_FILE = CONFIG_FOLDER .. "/bettervoid.cfg"
+local CONFIG_SLOT = "Default"
+local CONFIG_FILE = CONFIG_FOLDER .. "/bettervoid_default.cfg"
 local CONFIG_KEYS = {
     "height",
     "rate",
@@ -97,9 +98,18 @@ local function ensureConfigFolder()
     end
 end
 
-local function saveConfig()
+local function setConfigSlot(name)
+    CONFIG_SLOT = name or "Default"
+    CONFIG_FILE = CONFIG_FOLDER .. "/bettervoid_" .. string.lower(CONFIG_SLOT) .. ".cfg"
+end
+
+local function saveConfig(slot)
     if not writefile then
         return false, "writefile missing"
+    end
+
+    if slot then
+        setConfigSlot(slot)
     end
 
     ensureConfigFolder()
@@ -116,7 +126,11 @@ local function saveConfig()
     return ok, err
 end
 
-local function loadConfig()
+local function loadConfig(slot)
+    if slot then
+        setConfigSlot(slot)
+    end
+
     if not readfile or not isfile or not isfile(CONFIG_FILE) then
         return false
     end
@@ -144,12 +158,25 @@ local function loadConfig()
         end
     end
 
+    S.height = math.max(100, math.min(10000, S.height))
+    S.rate = math.max(0.03, math.min(0.5, S.rate))
+    S.velocity = math.max(500, math.min(5000, S.velocity))
+    S.roamRadius = math.max(100, math.min(5000, S.roamRadius))
+    S.roamSpeed = math.max(1, math.min(40, S.roamSpeed))
+    S.returnHeight = math.max(0, math.min(50, S.returnHeight))
+    S.shootAssistHeight = math.max(0, math.min(50, S.shootAssistHeight))
+    S.magDumpDelay = math.max(0.001, math.min(0.2, S.magDumpDelay))
+
     return true
 end
 
-local function deleteConfig()
+local function deleteConfig(slot)
     if not delfile then
         return false, "delfile missing"
+    end
+
+    if slot then
+        setConfigSlot(slot)
     end
 
     if not isfile or not isfile(CONFIG_FILE) then
@@ -168,44 +195,8 @@ local loadedConfig = loadConfig()
 _G.BetterVoid = S
 
 local toggle
-local heightSlider
-local rateSlider
-local velocitySlider
-local antiSnapToggle
-local roamToggle
-local roamRadiusSlider
-local roamSpeedSlider
-local returnHeightSlider
 local shootAssistToggle
-local shootAssistHeightSlider
 local magDumpToggle
-local magDumpDelaySlider
-
-local function syncConfigControls()
-    local pairsToSync = {
-        { heightSlider, S.height },
-        { rateSlider, S.rate },
-        { velocitySlider, S.velocity },
-        { antiSnapToggle, S.antiSnap },
-        { roamToggle, S.roam },
-        { roamRadiusSlider, S.roamRadius },
-        { roamSpeedSlider, S.roamSpeed },
-        { returnHeightSlider, S.returnHeight },
-        { shootAssistToggle, S.shootAssist },
-        { shootAssistHeightSlider, S.shootAssistHeight },
-        { magDumpToggle, S.magDump },
-        { magDumpDelaySlider, S.magDumpDelay }
-    }
-
-    for _, item in ipairs(pairsToSync) do
-        local control = item[1]
-        if control and control.Set then
-            pcall(function()
-                control:Set(item[2])
-            end)
-        end
-    end
-end
 
 local function getRoot()
     local char = lp and lp.Character
@@ -376,8 +367,10 @@ local win = Lib:CreateWindow({
 })
 
 local voidTab = win:Tab("Void", "shield")
+local shootingTab = win:Tab("Shooting", "crosshair")
 local settingsTab = win:Tab("Settings", "cog")
 local controls = voidTab:Section("Controls", "Left", "stable void loop")
+local shootingControls = shootingTab:Section("Controls", "Left", "shooting while roaming")
 
 toggle = controls:Toggle("Better Void", false, function(on)
     setEnabled(on)
@@ -387,62 +380,62 @@ if toggle and toggle.AddKeybind then
     toggle:AddKeybind("v", "Toggle")
 end
 
-heightSlider = controls:Slider("Up height", S.height, 25, 100, 10000, "", function(v)
+controls:Slider("Up height", S.height, 25, 100, 10000, "", function(v)
     S.height = math.floor(v)
     saveConfig()
 end)
 
-rateSlider = controls:Slider("Tick delay", S.rate, 0.01, 0.03, 0.5, "s", function(v)
+controls:Slider("Tick delay", S.rate, 0.01, 0.03, 0.5, "s", function(v)
     S.rate = math.max(0.03, v)
     saveConfig()
 end)
 
-velocitySlider = controls:Slider("Up velocity", S.velocity, 100, 500, 5000, "", function(v)
+controls:Slider("Up velocity", S.velocity, 100, 500, 5000, "", function(v)
     S.velocity = math.floor(v)
     saveConfig()
 end)
 
-antiSnapToggle = controls:Toggle("Anti snapback", S.antiSnap, function(on)
+controls:Toggle("Anti snapback", S.antiSnap, function(on)
     S.antiSnap = on and true or false
     saveConfig()
 end)
 
-roamToggle = controls:Toggle("Map roam", S.roam, function(on)
+controls:Toggle("Map roam", S.roam, function(on)
     S.roam = on and true or false
     saveConfig()
 end)
 
-roamRadiusSlider = controls:Slider("Roam radius", S.roamRadius, 50, 100, 5000, "", function(v)
+controls:Slider("Roam radius", S.roamRadius, 50, 100, 5000, "", function(v)
     S.roamRadius = math.floor(v)
     saveConfig()
 end)
 
-roamSpeedSlider = controls:Slider("Roam speed", S.roamSpeed, 1, 1, 40, "", function(v)
+controls:Slider("Roam speed", S.roamSpeed, 1, 1, 40, "", function(v)
     S.roamSpeed = math.floor(v)
     saveConfig()
 end)
 
-returnHeightSlider = controls:Slider("Return height", S.returnHeight, 1, 0, 50, " studs", function(v)
+controls:Slider("Return height", S.returnHeight, 1, 0, 50, " studs", function(v)
     S.returnHeight = math.floor(v)
     saveConfig()
 end)
 
-shootAssistToggle = controls:Toggle("Shoot assist", S.shootAssist, function(on)
+shootAssistToggle = shootingControls:Toggle("Shoot assist", S.shootAssist, function(on)
     S.shootAssist = on and true or false
     saveConfig()
 end)
 
-shootAssistHeightSlider = controls:Slider("Shoot height", S.shootAssistHeight, 1, 0, 50, " studs", function(v)
+shootingControls:Slider("Shoot height", S.shootAssistHeight, 1, 0, 50, " studs", function(v)
     S.shootAssistHeight = math.floor(v)
     saveConfig()
 end)
 
-magDumpToggle = controls:Toggle("Mag dump", S.magDump, function(on)
+magDumpToggle = shootingControls:Toggle("Mag dump", S.magDump, function(on)
     S.magDump = on and true or false
     saveConfig()
 end)
 
-magDumpDelaySlider = controls:Slider("Dump delay", S.magDumpDelay, 0.001, 0.001, 0.2, "s", function(v)
+shootingControls:Slider("Dump delay", S.magDumpDelay, 0.001, 0.001, 0.2, "s", function(v)
     S.magDumpDelay = math.max(0.001, v)
     saveConfig()
 end)
@@ -479,7 +472,7 @@ controls:Button("Very high", function()
     notify("Preset", "very high selected", "warning")
 end)
 
-controls:Button("Dump now", function()
+shootingControls:Button("Dump now", function()
     if not S.enabled then
         notify("Mag dump", "turn Better Void on first", "warning")
         return
@@ -513,38 +506,54 @@ controls:Button("Return to origin", function()
     end
 end)
 
-local configSection = settingsTab:Section("Config", "Left", "BetterVoid/bettervoid.cfg")
-configSection:Button("Save", function()
-    local ok, err = saveConfig()
-    if ok then
-        notify("Config", "saved", "success")
-    else
-        notify("Config", "save failed: " .. tostring(err), "error")
-    end
-end)
+local configSection = settingsTab:Section("Config slots", "Left", "save, load, delete")
 
-configSection:Button("Load", function()
-    local ok, err = loadConfig()
-    if ok then
-        syncConfigControls()
-        notify("Config", "loaded", "success")
-    else
-        notify("Config", "load failed: " .. tostring(err or "file missing"), "error")
-    end
-end)
+local function addConfigSlot(slotName)
+    configSection:Divider(slotName)
 
-local deleteButton = configSection:Button("Delete", function()
-    local ok, err = deleteConfig()
-    if ok then
-        notify("Config", "deleted", "warning")
-    else
-        notify("Config", "delete failed: " .. tostring(err), "error")
-    end
-end)
+    configSection:Button("Save " .. slotName, function()
+        local ok, err = saveConfig(slotName)
+        if ok then
+            notify("Config", slotName .. " saved", "success")
+        else
+            notify("Config", "save failed: " .. tostring(err), "error")
+        end
+    end)
 
-if deleteButton and deleteButton.SetRisk then
-    deleteButton:SetRisk()
+    configSection:Button("Load " .. slotName, function()
+        local ok, err = loadConfig(slotName)
+        if ok then
+            notify("Config", slotName .. " loaded. Reopen GUI to refresh slider positions.", "success")
+        else
+            notify("Config", "load failed: " .. tostring(err or "file missing"), "error")
+        end
+    end)
+
+    local deleteButton = configSection:Button("Delete " .. slotName, function()
+        local ok, err = deleteConfig(slotName)
+        if ok then
+            notify("Config", slotName .. " deleted", "warning")
+        else
+            notify("Config", "delete failed: " .. tostring(err), "error")
+        end
+    end)
+
+    if deleteButton and deleteButton.SetRisk then
+        deleteButton:SetRisk()
+    end
 end
+
+addConfigSlot("Slot1")
+addConfigSlot("Slot2")
+addConfigSlot("Slot3")
+
+local settingsInfo = settingsTab:Section("Status", "Right", "active config")
+settingsInfo:Label(function()
+    return "Active slot: " .. tostring(CONFIG_SLOT)
+end)
+settingsInfo:Label(function()
+    return "File: " .. tostring(CONFIG_FILE)
+end)
 
 local info = voidTab:Section("Status", "Right", "live values")
 info:Label(function()
