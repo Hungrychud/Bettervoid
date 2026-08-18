@@ -9,12 +9,15 @@ Files:
 
 - `P` opens and closes the INS-ui menu.
 - `V` toggles the void loop.
+- `Z` toggles Auto stomp by default; change it from the keybind control in the GUI.
+- `C` toggles Teleport stomp by default; change it from the keybind control in the GUI.
 - `X` unloads the script and removes the GUI.
-- Use the GUI sliders to change height, tick delay, velocity, roam, shooting stabilizer, and stomp settings.
+- Use the GUI sliders to change height, tick delay, velocity, roam, shooting stabilizer, no reload, and stomp settings.
 
 ## Notes
 
 - This is a client-side script. Server-authoritative systems, such as damage validation, may ignore client-only rapid-fire attempts.
+- `No reload` keeps local supported weapon ammo topped up and clears the local reload flag. Server-side ammo validation may still apply.
 - `Visual rapid fire` is off by default because it can show extra local shots without server damage registration.
 - `Auto stomp` uses the existing `MainGameEvent` stomp action and depends on what the live server accepts.
 

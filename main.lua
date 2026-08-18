@@ -57,6 +57,7 @@ local S = {
     roamSpeed = 8,
     returnHeight = 3,
     shootAssist = true,
+    noReload = true,
     instantShoot = false,
     instantShootDelay = 0.01,
     instantShootBurst = 6,
@@ -100,6 +101,7 @@ local CONFIG_KEYS = {
     "roamSpeed",
     "returnHeight",
     "shootAssist",
+    "noReload",
     "instantShoot",
     "instantShootDelay",
     "instantShootBurst",
@@ -229,6 +231,7 @@ local function applyShooterSettings(tool)
     if cooldown and settings.ShootingCooldown ~= nil then
         cooldown.Value = settings.ShootingCooldown
     end
+
 end
 
 local function applyShooterContainer(container)
@@ -258,9 +261,42 @@ local function applyShooterPlayer(player)
     applyShooterContainer(player.Character)
 end
 
+local function refillShooterContainer(container)
+    if not container then
+        return
+    end
+
+    for _, tool in ipairs(container:GetChildren()) do
+        if tool.ClassName == "Tool" and SHOOTER_TABLE[tool.Name] then
+            local ammo = tool:FindFirstChild("Ammo")
+            local maxAmmo = tool:FindFirstChild("MaxAmmo")
+            if ammo and maxAmmo and ammo.Value < maxAmmo.Value then
+                ammo.Value = maxAmmo.Value
+            end
+        end
+    end
+end
+
+local function applyNoReload()
+    if not S.noReload then
+        return
+    end
+
+    local char = lp and lp.Character
+    local bodyEffects = char and char:FindFirstChild("BodyEffects")
+    local reload = bodyEffects and bodyEffects:FindFirstChild("Reload")
+    if reload and reload.Value ~= false then
+        reload.Value = false
+    end
+
+    refillShooterContainer(lp and lp:FindFirstChild("Backpack"))
+    refillShooterContainer(char)
+end
+
 task.spawn(function()
     while S.running do
         applyLoadoutShooterSettings()
+        applyNoReload()
 
         for _, player in ipairs(Players:GetPlayers()) do
             applyShooterPlayer(player)
@@ -297,6 +333,8 @@ _G.BetterVoid = S
 
 local toggle
 local shootAssistToggle
+local autoStompToggle
+local teleportStompToggle
 local notify
 
 local function getRoot()
@@ -653,6 +691,11 @@ shootAssistToggle = shootingControls:Toggle("Aim stabilizer", S.shootAssist, fun
     saveConfig()
 end)
 
+shootingControls:Toggle("No reload", S.noReload, function(on)
+    S.noReload = on and true or false
+    saveConfig()
+end)
+
 shootingControls:Toggle("Visual rapid fire", S.instantShoot, function(on)
     S.instantShoot = on and true or false
     saveConfig()
@@ -678,15 +721,23 @@ shootingControls:Slider("Hold time", S.shootHoldTime, 0.01, 0.05, 2, "s", functi
     saveConfig()
 end)
 
-shootingControls:Toggle("Auto stomp", S.autoStomp, function(on)
+autoStompToggle = shootingControls:Toggle("Auto stomp", S.autoStomp, function(on)
     S.autoStomp = on and true or false
     saveConfig()
 end)
 
-shootingControls:Toggle("Teleport stomp", S.stompTeleport, function(on)
+if autoStompToggle and autoStompToggle.AddKeybind then
+    autoStompToggle:AddKeybind("z", "Toggle")
+end
+
+teleportStompToggle = shootingControls:Toggle("Teleport stomp", S.stompTeleport, function(on)
     S.stompTeleport = on and true or false
     saveConfig()
 end)
+
+if teleportStompToggle and teleportStompToggle.AddKeybind then
+    teleportStompToggle:AddKeybind("c", "Toggle")
+end
 
 shootingControls:Slider("Stomp range", S.stompRange, 5, 10, 10000, " studs", function(v)
     S.stompRange = math.floor(v)
@@ -832,6 +883,9 @@ info:Label(function()
     return "Aim stabilizer: " .. (S.shootAssist and "ON" or "OFF")
 end)
 info:Label(function()
+    return "No reload: " .. (S.noReload and "ON" or "OFF")
+end)
+info:Label(function()
     return "Visual rapid fire: " .. (S.instantShoot and "ON" or "OFF")
 end)
 info:Label(function()
@@ -895,6 +949,13 @@ function S.unload()
 
     _G.BetterVoid = nil
 end
+
+task.spawn(function()
+    while S.running do
+        applyNoReload()
+        task.wait(0.08)
+    end
+end)
 
 task.spawn(function()
     local lastV = false
