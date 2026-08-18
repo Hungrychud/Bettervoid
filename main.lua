@@ -72,7 +72,6 @@ local S = {
     stompRepeats = 6,
     stompInterval = 0.08,
     lastStompAt = 0,
-    lastStompDebugAt = 0,
     lastStompStatus = "idle",
     anchorX = nil,
     anchorY = nil,
@@ -490,7 +489,7 @@ shootingControls:Toggle("Auto stomp", S.autoStomp, function(on)
     saveConfig()
 end)
 
-shootingControls:Slider("Stomp range", S.stompRange, 5, 10, 1000, " studs", function(v)
+shootingControls:Slider("Stomp range", S.stompRange, 5, 10, 100000, " studs", function(v)
     S.stompRange = math.floor(v)
     saveConfig()
 end)
@@ -749,12 +748,10 @@ task.spawn(function()
                 local targetChar, targetRoot = getNearestKnockedTarget(S.stompRange)
                 if targetRoot and stompTarget(targetRoot) then
                     S.lastStompAt = now
-                elseif now - S.lastStompDebugAt > 2 then
-                    S.lastStompDebugAt = now
-                    if not targetRoot then
-                        S.lastStompStatus = "no knocked target in range"
-                    end
-                    print("Better Void auto stomp:", targetChar and "stomp prep failed" or "no knocked target in range")
+                elseif not targetRoot then
+                    S.lastStompStatus = "no knocked target in range"
+                else
+                    S.lastStompStatus = "stomp prep failed"
                 end
             end
             task.wait(0.08)
