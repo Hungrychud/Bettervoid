@@ -60,6 +60,18 @@ local S = {
     noReload = true,
     aimCorrector = true,
     aimCorrectorFov = 8,
+    targetPriority = 1,
+    targetPartMode = 1,
+    ignoreTeam = true,
+    ignoreDead = true,
+    ignoreKnockedAim = true,
+    visibleCheck = true,
+    showFov = true,
+    knockedEsp = true,
+    hasReturnMarker = false,
+    returnX = 0,
+    returnY = 0,
+    returnZ = 0,
     instantShoot = false,
     instantShootDelay = 0.01,
     instantShootBurst = 6,
@@ -106,6 +118,18 @@ local CONFIG_KEYS = {
     "noReload",
     "aimCorrector",
     "aimCorrectorFov",
+    "targetPriority",
+    "targetPartMode",
+    "ignoreTeam",
+    "ignoreDead",
+    "ignoreKnockedAim",
+    "visibleCheck",
+    "showFov",
+    "knockedEsp",
+    "hasReturnMarker",
+    "returnX",
+    "returnY",
+    "returnZ",
     "instantShoot",
     "instantShootDelay",
     "instantShootBurst",
@@ -195,6 +219,8 @@ local function loadConfig(slot)
     S.roamSpeed = math.max(1, math.min(40, S.roamSpeed))
     S.returnHeight = math.max(0, math.min(50, S.returnHeight))
     S.aimCorrectorFov = math.max(1, math.min(30, S.aimCorrectorFov))
+    S.targetPriority = math.max(1, math.min(3, math.floor(S.targetPriority)))
+    S.targetPartMode = math.max(1, math.min(3, math.floor(S.targetPartMode)))
     S.instantShootDelay = math.max(0.01, math.min(0.2, S.instantShootDelay))
     S.instantShootBurst = math.max(1, math.min(20, math.floor(S.instantShootBurst)))
     S.shootHoldTime = math.max(0.05, math.min(2, S.shootHoldTime))
@@ -209,6 +235,7 @@ end
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local RunService = game:GetService("RunService")
 
 local SHOOTER_TABLE = {
     ["[Revolver]"] = {
@@ -341,6 +368,8 @@ local shootAssistToggle
 local autoStompToggle
 local teleportStompToggle
 local notify
+local visualConn
+local visuals = { fov = nil, pool = {}, targets = {} }
 
 local function getRoot()
     local char = lp and lp.Character
@@ -373,6 +402,115 @@ local function getShotOrigin(tool, handle)
     return origin
 end
 
+local function getModeName(value, names)
+    return names[value] or names[1]
+end
+
+local function getTargetPriorityName()
+    return getModeName(S.targetPriority, { "Crosshair", "Distance", "Low health" })
+end
+
+local function getTargetPartName()
+    return getModeName(S.targetPartMode, { "Head", "Root", "Smart" })
+end
+
+local function sameTeam(plr)
+    if not S.ignoreTeam or not lp or not lp.Team or not plr or not plr.Team then
+        return false
+    end
+
+    return lp.Team.Name == plr.Team.Name
+end
+
+local function isDeadCharacter(char, hum)
+    local bodyEffects = char and char:FindFirstChild("BodyEffects")
+    local dead = bodyEffects and bodyEffects:FindFirstChild("Dead")
+    return (hum and hum.Health <= 0) or (dead and dead.Value == true)
+end
+
+local function isKnockedCharacter(char)
+    local bodyEffects = char and char:FindFirstChild("BodyEffects")
+    local ko = bodyEffects and bodyEffects:FindFirstChild("K.O")
+    local dead = bodyEffects and bodyEffects:FindFirstChild("Dead")
+    return ko and ko.Value == true and not (dead and dead.Value == true)
+end
+
+local function getAimTargetPosition(char, camPos, camLook)
+    local head = char and char:FindFirstChild("Head")
+    local root = char and char:FindFirstChild("HumanoidRootPart")
+
+    if S.targetPartMode == 2 then
+        return root and root.Position or (head and head.Position)
+    end
+
+    if S.targetPartMode == 3 then
+        local bestPos
+        local bestDot = -1
+        for _, part in ipairs({ head, root }) do
+            if part then
+                local delta = part.Position - camPos
+                if delta.Magnitude > 0 then
+                    local dot = delta.Unit:Dot(camLook)
+                    if dot > bestDot then
+                        bestDot = dot
+                        bestPos = part.Position
+                    end
+                end
+            end
+        end
+        return bestPos
+    end
+
+    return head and head.Position or (root and root.Position)
+end
+
+local function passesTargetFilters(plr, char, hum, knockedOnly)
+    if not plr or plr.UserId == lp.UserId or sameTeam(plr) then
+        return false
+    end
+
+    if S.ignoreDead and isDeadCharacter(char, hum) then
+        return false
+    end
+
+    local knocked = isKnockedCharacter(char)
+    if knockedOnly then
+        return knocked
+    end
+
+    if S.ignoreKnockedAim and knocked then
+        return false
+    end
+
+    return true
+end
+
+local function hasLineOfSight(origin, targetPos, char)
+    if not S.visibleCheck then
+        return true
+    end
+
+    local params = RaycastParams.new()
+    params.FilterDescendantsInstances = { lp.Character }
+    params.FilterType = Enum.RaycastFilterType.Exclude
+    params.IgnoreWater = true
+
+    local los = workspace:Raycast(origin, targetPos - origin, params)
+    return not los or (los.Instance and los.Instance:IsDescendantOf(char))
+end
+
+local function getTargetScore(priority, dot, dist, hum)
+    if priority == 2 then
+        return -dist
+    end
+
+    if priority == 3 then
+        return -(hum and hum.Health or 100)
+    end
+
+    return dot
+end
+
 local function getAimCorrectedPosition(origin, rangeValue)
     if not S.aimCorrector then
         return nil
@@ -386,33 +524,25 @@ local function getAimCorrectedPosition(origin, rangeValue)
     local camPos = camera.CFrame.Position
     local camLook = camera.CFrame.LookVector
     local minDot = math.cos(math.rad(S.aimCorrectorFov or 8))
-    local bestDot = minDot
+    local bestScore = -math.huge
     local bestPos
 
-    local params = RaycastParams.new()
-    params.FilterDescendantsInstances = { lp.Character }
-    params.FilterType = Enum.RaycastFilterType.Exclude
-    params.IgnoreWater = true
-
     for _, plr in ipairs(Players:GetPlayers()) do
-        if plr.UserId ~= lp.UserId then
-            local char = plr.Character
-            local hum = char and char:FindFirstChild("Humanoid")
-            local head = char and char:FindFirstChild("Head")
-            local root = char and char:FindFirstChild("HumanoidRootPart")
-            local aimPart = head or root
+        local char = plr.Character
+        local hum = char and char:FindFirstChild("Humanoid")
 
-            if aimPart and (not hum or hum.Health > 0) then
-                local targetPos = aimPart.Position
+        if passesTargetFilters(plr, char, hum, false) then
+            local targetPos = getAimTargetPosition(char, camPos, camLook)
+            if targetPos then
                 local fromOrigin = targetPos - origin
                 local fromCamera = targetPos - camPos
 
                 if fromOrigin.Magnitude <= rangeValue and fromCamera.Magnitude > 0 then
                     local dot = fromCamera.Unit:Dot(camLook)
-                    if dot > bestDot then
-                        local los = workspace:Raycast(origin, fromOrigin, params)
-                        if not los or (los.Instance and los.Instance:IsDescendantOf(char)) then
-                            bestDot = dot
+                    if dot >= minDot and hasLineOfSight(origin, targetPos, char) then
+                        local score = getTargetScore(S.targetPriority, dot, fromOrigin.Magnitude, hum)
+                        if score > bestScore then
+                            bestScore = score
                             bestPos = targetPos
                         end
                     end
@@ -525,29 +655,35 @@ local function getNearestKnockedTarget(maxRange)
         return nil
     end
 
+    local camera = workspace.CurrentCamera
+    local camPos = camera and camera.CFrame.Position or localRoot.Position
+    local camLook = camera and camera.CFrame.LookVector or localRoot.CFrame.LookVector
     local bestChar
     local bestRoot
-    local bestDist = maxRange or 85
+    local bestDist
+    local bestScore = -math.huge
     local localPos = localRoot.Position
+    local range = maxRange or 85
 
     for _, plr in ipairs(Players:GetPlayers()) do
-        if plr.UserId ~= lp.UserId then
-            local char = plr.Character
-            local root = getCharacterRoot(char)
-            if root and isKnocked(char) then
-                local delta = root.Position - localPos
-                local dist
+        local char = plr.Character
+        local hum = char and char:FindFirstChild("Humanoid")
+        local root = getCharacterRoot(char)
 
-                if S.enabled then
-                    dist = Vector3.new(delta.X, 0, delta.Z).Magnitude
-                else
-                    dist = delta.Magnitude
-                end
+        if root and passesTargetFilters(plr, char, hum, true) then
+            local delta = root.Position - localPos
+            local dist = S.enabled and Vector3.new(delta.X, 0, delta.Z).Magnitude or delta.Magnitude
 
-                if dist <= bestDist then
+            if dist <= range then
+                local camDelta = root.Position - camPos
+                local dot = camDelta.Magnitude > 0 and camDelta.Unit:Dot(camLook) or 0
+                local score = getTargetScore(S.targetPriority, dot, dist, hum)
+
+                if score > bestScore then
                     bestChar = char
                     bestRoot = root
                     bestDist = dist
+                    bestScore = score
                 end
             end
         end
@@ -670,6 +806,77 @@ local function stopVoid(reason)
     notify("Better Void", reason or "disabled", "warning")
 end
 
+local function saveReturnMarker()
+    local root = getRoot()
+    if not root then
+        notify("Return marker", "character root missing", "error")
+        return false
+    end
+
+    S.returnX = root.Position.X
+    S.returnY = root.Position.Y
+    S.returnZ = root.Position.Z
+    S.hasReturnMarker = true
+    saveConfig()
+    notify("Return marker", "saved", "success")
+    return true
+end
+
+local function returnToMarker()
+    if not S.hasReturnMarker then
+        notify("Return marker", "no marker saved", "warning")
+        return false
+    end
+
+    local root = getRoot()
+    if not root then
+        notify("Return marker", "character root missing", "error")
+        return false
+    end
+
+    pcall(function()
+        root.CFrame = CFrame.new(S.returnX, S.returnY + S.returnHeight, S.returnZ)
+        root.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
+        root.CanCollide = true
+    end)
+    notify("Return marker", "returned", "success")
+    return true
+end
+
+local function panicAll()
+    S.enabled = false
+    S.autoStomp = false
+    S.instantShoot = false
+    S.noReload = false
+    S.shootAssistUntil = 0
+    S.stompHoldUntil = 0
+    stopVoid("panic disabled active features")
+
+    if toggle and toggle.Set then
+        pcall(function()
+            toggle:Set(false)
+        end)
+    end
+    if autoStompToggle and autoStompToggle.Set then
+        pcall(function()
+            autoStompToggle:Set(false)
+        end)
+    end
+end
+
+local function manualStompOnce()
+    local _, targetRoot = getNearestKnockedTarget(S.stompRange)
+    if targetRoot and stompTarget(targetRoot) then
+        S.lastStompAt = tick()
+        notify("Manual stomp", "stomp fired", "success")
+        return true
+    end
+
+    S.lastStompStatus = "manual: no knocked target"
+    notify("Manual stomp", "no knocked target", "warning")
+    return false
+end
+
 local win = Lib:CreateWindow({
     title = "Better Void",
     subtitle = "INS UI",
@@ -702,6 +909,7 @@ local shootingTab = win:Tab("Shooting", "crosshair")
 local settingsTab = win:Tab("Settings", "cog")
 local controls = voidTab:Section("Controls", "Left", "stable void loop")
 local shootingControls = shootingTab:Section("Controls", "Left", "shooting while roaming")
+local visualControls = shootingTab:Section("Visuals", "Right", "aim + target display")
 
 toggle = controls:Toggle("Better Void", false, function(on)
     setEnabled(on)
@@ -741,7 +949,7 @@ controls:Slider("Roam radius", S.roamRadius, 50, 100, 5000, "", function(v)
     saveConfig()
 end)
 
-controls:Slider("Roam speed", S.roamSpeed, 1, 1, 40, "", function(v)
+controls:Slider("Roam speed", S.roamSpeed, 1, 1, 500, "", function(v)
     S.roamSpeed = math.floor(v)
     saveConfig()
 end)
@@ -770,6 +978,64 @@ shootingControls:Slider("Aim FOV", S.aimCorrectorFov, 1, 1, 30, " deg", function
     S.aimCorrectorFov = math.max(1, v)
     saveConfig()
 end)
+
+shootingControls:Button("Cycle target priority", function()
+    S.targetPriority = (S.targetPriority % 3) + 1
+    saveConfig()
+    notify("Target priority", getTargetPriorityName(), "info")
+end)
+
+shootingControls:Button("Cycle target part", function()
+    S.targetPartMode = (S.targetPartMode % 3) + 1
+    saveConfig()
+    notify("Target part", getTargetPartName(), "info")
+end)
+
+shootingControls:Toggle("Ignore team", S.ignoreTeam, function(on)
+    S.ignoreTeam = on and true or false
+    saveConfig()
+end)
+
+shootingControls:Toggle("Ignore dead", S.ignoreDead, function(on)
+    S.ignoreDead = on and true or false
+    saveConfig()
+end)
+
+shootingControls:Toggle("Ignore knocked aim", S.ignoreKnockedAim, function(on)
+    S.ignoreKnockedAim = on and true or false
+    saveConfig()
+end)
+
+shootingControls:Toggle("Visible check", S.visibleCheck, function(on)
+    S.visibleCheck = on and true or false
+    saveConfig()
+end)
+
+visualControls:Toggle("FOV circle", S.showFov, function(on)
+    S.showFov = on and true or false
+    saveConfig()
+end)
+
+visualControls:Toggle("Knocked ESP", S.knockedEsp, function(on)
+    S.knockedEsp = on and true or false
+    saveConfig()
+end)
+
+visualControls:Button("Save return marker", function()
+    saveReturnMarker()
+end)
+
+visualControls:Button("Return to marker", function()
+    returnToMarker()
+end)
+
+visualControls:Button("Manual stomp once", function()
+    manualStompOnce()
+end)
+
+visualControls:Button("Panic disable", function()
+    panicAll()
+end):SetRisk()
 
 shootingControls:Toggle("Visual rapid fire", S.instantShoot, function(on)
     S.instantShoot = on and true or false
@@ -967,6 +1233,18 @@ info:Label(function()
     return "Aim FOV: " .. tostring(S.aimCorrectorFov) .. " deg"
 end)
 info:Label(function()
+    return "Target priority: " .. getTargetPriorityName()
+end)
+info:Label(function()
+    return "Target part: " .. getTargetPartName()
+end)
+info:Label(function()
+    return "Filters: " .. (S.ignoreTeam and "team " or "") .. (S.visibleCheck and "visible" or "")
+end)
+info:Label(function()
+    return "Return marker: " .. (S.hasReturnMarker and "saved" or "none")
+end)
+info:Label(function()
     return "Visual rapid fire: " .. (S.instantShoot and "ON" or "OFF")
 end)
 info:Label(function()
@@ -1003,7 +1281,7 @@ info:Label(function()
     local root = getRoot()
     return "Y position: " .. (root and tostring(math.floor(root.Position.Y)) or "none")
 end)
-info:Info("Press P to open/close the menu. V toggles Better Void. X unloads everything.")
+info:Info("Keys: V void, Z auto stomp, C teleport stomp, J stomp once, B panic, M/N marker, 1-3 load, 4-6 save.")
 info:Button("Unload", function()
     S.unload()
 end):SetRisk()
@@ -1011,6 +1289,29 @@ end):SetRisk()
 function S.unload()
     S.enabled = false
     S.running = false
+
+    if visualConn then
+        pcall(function()
+            visualConn:Disconnect()
+        end)
+        visualConn = nil
+    end
+
+    if visuals.fov then
+        pcall(function()
+            visuals.fov:Remove()
+        end)
+        visuals.fov = nil
+    end
+
+    for _, item in ipairs(visuals.pool) do
+        pcall(function()
+            if item.tag then item.tag:Remove() end
+            if item.line then item.line:Remove() end
+        end)
+    end
+    visuals.pool = {}
+    visuals.targets = {}
 
     if win then
         pcall(function()
@@ -1031,26 +1332,147 @@ function S.unload()
     _G.BetterVoid = nil
 end
 
+local function setupVisuals()
+    if not Drawing or not RunService then
+        return
+    end
+
+    local ok = pcall(function()
+        visuals.fov = Drawing.new("Circle")
+        visuals.fov.Color = Color3.fromRGB(80, 170, 255)
+        visuals.fov.Thickness = 1
+        visuals.fov.NumSides = 96
+        visuals.fov.Filled = false
+        visuals.fov.Transparency = 0.2
+        visuals.fov.Visible = false
+
+        for i = 1, 16 do
+            local tag = Drawing.new("Text")
+            tag.Size = 13
+            tag.Center = true
+            tag.Outline = true
+            tag.Color = Color3.fromRGB(255, 110, 110)
+            tag.Visible = false
+
+            local line = Drawing.new("Line")
+            line.Thickness = 1
+            line.Color = Color3.fromRGB(255, 110, 110)
+            line.Transparency = 0.35
+            line.Visible = false
+
+            visuals.pool[i] = { tag = tag, line = line }
+        end
+    end)
+
+    if not ok then
+        visuals.fov = nil
+        visuals.pool = {}
+        return
+    end
+
+    task.spawn(function()
+        while S.running do
+            local out = {}
+            if S.knockedEsp then
+                for _, plr in ipairs(Players:GetPlayers()) do
+                    if plr.UserId ~= lp.UserId then
+                        local char = plr.Character
+                        local hum = char and char:FindFirstChild("Humanoid")
+                        local root = getCharacterRoot(char)
+                        if root and passesTargetFilters(plr, char, hum, true) then
+                            out[#out + 1] = { name = plr.Name, root = root }
+                            if #out >= #visuals.pool then
+                                break
+                            end
+                        end
+                    end
+                end
+            end
+            visuals.targets = out
+            task.wait(0.4)
+        end
+    end)
+
+    visualConn = RunService.RenderStepped:Connect(function()
+        local camera = workspace.CurrentCamera
+        local viewport = camera and camera.ViewportSize
+        local center = viewport and Vector2.new(viewport.X * 0.5, viewport.Y * 0.5) or Vector2.new(0, 0)
+
+        if visuals.fov then
+            if S.showFov and S.aimCorrector and viewport and camera then
+                local fov = math.max(1, S.aimCorrectorFov or 8)
+                local radius = math.tan(math.rad(fov)) / math.tan(math.rad(camera.FieldOfView * 0.5)) * viewport.Y * 0.5
+                visuals.fov.Position = center
+                visuals.fov.Radius = math.max(4, radius)
+                visuals.fov.Visible = true
+            else
+                visuals.fov.Visible = false
+            end
+        end
+
+        local used = 0
+        if S.knockedEsp and viewport then
+            for i = 1, #visuals.targets do
+                if used >= #visuals.pool then break end
+                local target = visuals.targets[i]
+                local pos, visible = WorldToScreen(target.root.Position + Vector3.new(0, 2.5, 0))
+                local foot, footVisible = WorldToScreen(target.root.Position - Vector3.new(0, 2.5, 0))
+                if visible and footVisible then
+                    used = used + 1
+                    local item = visuals.pool[used]
+                    item.tag.Text = target.name .. " K.O"
+                    item.tag.Position = Vector2.new(pos.X, pos.Y - 14)
+                    item.tag.Visible = true
+                    item.line.From = Vector2.new(center.X, viewport.Y - 8)
+                    item.line.To = Vector2.new(foot.X, foot.Y)
+                    item.line.Visible = true
+                end
+            end
+        end
+
+        for i = used + 1, #visuals.pool do
+            local item = visuals.pool[i]
+            item.tag.Visible = false
+            item.line.Visible = false
+        end
+    end)
+end
+
+setupVisuals()
+
 task.spawn(function()
     while S.running do
         applyNoReload()
         task.wait(0.08)
     end
 end)
-
 task.spawn(function()
-    local lastV = false
-    local lastX = false
+    local keyState = {}
     local lastAim = false
 
+    local function pressed(code)
+        local down = iskeypressed and iskeypressed(code)
+        local once = down and not keyState[code]
+        keyState[code] = down
+        return once
+    end
+
+    local function loadSlot(slot)
+        local ok, err = loadConfig(slot)
+        notify("Config", ok and (slot .. " loaded") or ("load failed: " .. tostring(err or "file missing")), ok and "success" or "error")
+    end
+
+    local function saveSlot(slot)
+        local ok, err = saveConfig(slot)
+        notify("Config", ok and (slot .. " saved") or ("save failed: " .. tostring(err)), ok and "success" or "error")
+    end
+
     while S.running do
-        local v = iskeypressed(118)
-        local x = iskeypressed(120)
         local mouse1 = ismouse1pressed and ismouse1pressed()
         local mouse2 = ismouse2pressed and ismouse2pressed()
         local aiming = mouse1 or (S.stabilizeOnAim and mouse2)
 
-        if v and not lastV then
+        if pressed(118) then
             setEnabled(not S.enabled)
             if toggle and toggle.Set then
                 pcall(function()
@@ -1059,10 +1481,29 @@ task.spawn(function()
             end
         end
 
-        if x and not lastX then
+        if pressed(120) then
             S.unload()
             break
         end
+
+        if pressed(106) then
+            manualStompOnce()
+        end
+        if pressed(98) then
+            panicAll()
+        end
+        if pressed(109) then
+            saveReturnMarker()
+        end
+        if pressed(110) then
+            returnToMarker()
+        end
+        if pressed(49) then loadSlot("Slot1") end
+        if pressed(50) then loadSlot("Slot2") end
+        if pressed(51) then loadSlot("Slot3") end
+        if pressed(52) then saveSlot("Slot1") end
+        if pressed(53) then saveSlot("Slot2") end
+        if pressed(54) then saveSlot("Slot3") end
 
         if S.instantShoot and mouse1 then
             local now = tick()
@@ -1093,9 +1534,6 @@ task.spawn(function()
                 S.snapBurstUntil = tick() + 0.25
             end
         end
-
-        lastV = v
-        lastX = x
         lastAim = aiming
         task.wait(0.02)
     end
