@@ -63,9 +63,11 @@ local S = {
     shootLockY = nil,
     shootLockZ = nil,
     autoStomp = false,
-    stompRange = 85,
+    stompRange = 350,
+    stompHeight = 1,
     stompDelay = 0.35,
     lastStompAt = 0,
+    selectedPlayer = nil,
     anchorX = nil,
     anchorY = nil,
     anchorZ = nil,
@@ -92,6 +94,7 @@ local CONFIG_KEYS = {
     "shootHoldTime",
     "autoStomp",
     "stompRange",
+    "stompHeight",
     "stompDelay"
 }
 
@@ -170,7 +173,8 @@ local function loadConfig(slot)
     S.roamSpeed = math.max(1, math.min(40, S.roamSpeed))
     S.returnHeight = math.max(0, math.min(50, S.returnHeight))
     S.shootHoldTime = math.max(0.05, math.min(1, S.shootHoldTime))
-    S.stompRange = math.max(10, math.min(500, S.stompRange))
+    S.stompRange = math.max(10, math.min(1000, S.stompRange))
+    S.stompHeight = math.max(0, math.min(8, S.stompHeight))
     S.stompDelay = math.max(0.1, math.min(2, S.stompDelay))
 
     return true
@@ -230,13 +234,22 @@ local function getNearestKnockedTarget(maxRange)
     local bestChar
     local bestRoot
     local bestDist = maxRange or 85
+    local localPos = localRoot.Position
 
     for _, plr in ipairs(Players:GetPlayers()) do
         if plr.UserId ~= lp.UserId then
             local char = plr.Character
             local root = getCharacterRoot(char)
             if root and isKnocked(char) then
-                local dist = (root.Position - localRoot.Position).Magnitude
+                local delta = root.Position - localPos
+                local dist
+
+                if S.enabled then
+                    dist = Vector3.new(delta.X, 0, delta.Z).Magnitude
+                else
+                    dist = delta.Magnitude
+                end
+
                 if dist <= bestDist then
                     bestChar = char
                     bestRoot = root
@@ -259,13 +272,21 @@ local function stompTarget(targetRoot)
         return false
     end
 
+    local stompPos = targetRoot.Position + Vector3.new(0, S.stompHeight, 0)
+    S.shootAssistUntil = tick() + 0.55
+    S.shootLockX = stompPos.X
+    S.shootLockY = stompPos.Y
+    S.shootLockZ = stompPos.Z
+
     pcall(function()
-        root.CFrame = CFrame.new(targetRoot.Position + Vector3.new(0, 3, 0))
+        root.CFrame = CFrame.new(stompPos)
         root.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
         root.CanCollide = true
     end)
 
+    task.wait(0.12)
     mainRemote:FireServer("Stomp")
+    task.wait(0.08)
     return true
 end
 
@@ -375,9 +396,69 @@ end
 
 local voidTab = win:Tab("Void", "shield")
 local shootingTab = win:Tab("Shooting", "crosshair")
+local playersTab = win:Tab("Players", "users")
 local settingsTab = win:Tab("Settings", "cog")
 local controls = voidTab:Section("Controls", "Left", "stable void loop")
 local shootingControls = shootingTab:Section("Controls", "Left", "shooting while roaming")
+local playerListSection = playersTab:Section("Player table", "Left", "live players")
+local playerInfoSection = playersTab:Section("Target", "Right", "selected player")
+
+local function getPlayerByIndex(index)
+    local list = {}
+
+    for _, plr in ipairs(Players:GetPlayers()) do
+        list[#list + 1] = plr
+    end
+
+    table.sort(list, function(a, b)
+        return a.Name < b.Name
+    end)
+
+    return list[index], #list
+end
+
+playerListSection:Label(function()
+    return "Players in server: " .. tostring(#Players:GetPlayers())
+end)
+
+for i = 1, 32 do
+    playerListSection:Label(function()
+        local plr = getPlayerByIndex(i)
+        if not plr then
+            return tostring(i) .. ". -"
+        end
+
+        local char = plr.Character
+        local root = getCharacterRoot(char)
+        local localRoot = getRoot()
+        local dist = root and localRoot and math.floor((root.Position - localRoot.Position).Magnitude) or "?"
+        local ko = isKnocked(char) and " KO" or ""
+        local you = plr.UserId == lp.UserId and " (you)" or ""
+
+        return tostring(i) .. ". " .. plr.Name .. you .. " [" .. tostring(dist) .. "m]" .. ko
+    end)
+end
+
+for i = 1, 10 do
+    playerInfoSection:Button("Target row " .. tostring(i), function()
+        local plr = getPlayerByIndex(i)
+        if plr then
+            S.selectedPlayer = plr.Name
+            notify("Target", "selected " .. plr.Name, "success")
+        else
+            notify("Target", "no player in row " .. tostring(i), "warning")
+        end
+    end)
+end
+
+playerInfoSection:Label(function()
+    return "Selected: " .. tostring(S.selectedPlayer or "none")
+end)
+
+playerInfoSection:Button("Clear target", function()
+    S.selectedPlayer = nil
+    notify("Target", "cleared", "warning")
+end)
 
 toggle = controls:Toggle("Better Void", false, function(on)
     setEnabled(on)
@@ -442,8 +523,13 @@ shootingControls:Toggle("Auto stomp", S.autoStomp, function(on)
     saveConfig()
 end)
 
-shootingControls:Slider("Stomp range", S.stompRange, 5, 10, 500, " studs", function(v)
+shootingControls:Slider("Stomp range", S.stompRange, 5, 10, 1000, " studs", function(v)
     S.stompRange = math.floor(v)
+    saveConfig()
+end)
+
+shootingControls:Slider("Stomp height", S.stompHeight, 0.5, 0, 8, " studs", function(v)
+    S.stompHeight = math.max(0, v)
     saveConfig()
 end)
 
@@ -580,6 +666,9 @@ info:Label(function()
     return "Stomp range: " .. tostring(S.stompRange)
 end)
 info:Label(function()
+    return "Stomp height: " .. tostring(S.stompHeight)
+end)
+info:Label(function()
     local root = getRoot()
     return "Y position: " .. (root and tostring(math.floor(root.Position.Y)) or "none")
 end)
@@ -671,10 +760,6 @@ task.spawn(function()
                 local _, targetRoot = getNearestKnockedTarget(S.stompRange)
                 if targetRoot and stompTarget(targetRoot) then
                     S.lastStompAt = now
-                    S.shootAssistUntil = now + 0.12
-                    S.shootLockX = targetRoot.Position.X
-                    S.shootLockY = targetRoot.Position.Y + 3
-                    S.shootLockZ = targetRoot.Position.Z
                 end
             end
             task.wait(0.08)
