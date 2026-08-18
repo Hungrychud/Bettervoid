@@ -1,5 +1,40 @@
-local Players = game:GetService("Players")
-local lp = Players.LocalPlayer
+local function boot()
+local Players
+local lp
+local startedAt = tick()
+
+repeat
+    local loaded = false
+
+    if game then
+        local ok, result = pcall(function()
+            return game:IsLoaded()
+        end)
+        loaded = ok and result
+    end
+
+    if loaded then
+        local ok, service = pcall(function()
+            return game:GetService("Players")
+        end)
+
+        Players = ok and service or nil
+        if not Players then
+            Players = game:FindFirstChild("Players")
+        end
+
+        lp = Players and Players.LocalPlayer
+    end
+
+    if not lp then
+        task.wait(0.1)
+    end
+until lp or tick() - startedAt > 10
+
+if not lp then
+    warn("Better Void: LocalPlayer not found after waiting")
+    return
+end
 
 if _G.BetterVoid and _G.BetterVoid.unload then
     pcall(function()
@@ -365,3 +400,6 @@ task.spawn(function()
 end)
 
 notify("Better Void", "loaded. Press P to toggle the menu.", "success")
+end
+
+task.spawn(boot)
