@@ -59,6 +59,9 @@ local S = {
     shootAssist = true,
     shootAssistHeight = 3,
     shootAssistUntil = 0,
+    magDump = false,
+    magDumpDelay = 0.035,
+    magDumping = false,
     anchorX = nil,
     anchorY = nil,
     anchorZ = nil,
@@ -81,7 +84,9 @@ local CONFIG_KEYS = {
     "roamSpeed",
     "returnHeight",
     "shootAssist",
-    "shootAssistHeight"
+    "shootAssistHeight",
+    "magDump",
+    "magDumpDelay"
 }
 
 local function ensureConfigFolder()
@@ -173,6 +178,8 @@ local roamSpeedSlider
 local returnHeightSlider
 local shootAssistToggle
 local shootAssistHeightSlider
+local magDumpToggle
+local magDumpDelaySlider
 
 local function syncConfigControls()
     local pairsToSync = {
@@ -185,7 +192,9 @@ local function syncConfigControls()
         { roamSpeedSlider, S.roamSpeed },
         { returnHeightSlider, S.returnHeight },
         { shootAssistToggle, S.shootAssist },
-        { shootAssistHeightSlider, S.shootAssistHeight }
+        { shootAssistHeightSlider, S.shootAssistHeight },
+        { magDumpToggle, S.magDump },
+        { magDumpDelaySlider, S.magDumpDelay }
     }
 
     for _, item in ipairs(pairsToSync) do
@@ -201,6 +210,75 @@ end
 local function getRoot()
     local char = lp and lp.Character
     return char and char:FindFirstChild("HumanoidRootPart")
+end
+
+local function getEquippedGun()
+    local char = lp and lp.Character
+    if not char then
+        return nil
+    end
+
+    for _, item in ipairs(char:GetChildren()) do
+        if item.ClassName == "Tool" and item:FindFirstChild("Ammo") and item:FindFirstChild("ShootingCooldown") then
+            return item
+        end
+    end
+
+    return nil
+end
+
+local function startMagDump()
+    if S.magDumping then
+        return
+    end
+
+    S.magDumping = true
+
+    task.spawn(function()
+        local tool = getEquippedGun()
+        local ammo = tool and tool:FindFirstChild("Ammo")
+        local cooldown = tool and tool:FindFirstChild("ShootingCooldown")
+        local oldCooldown = cooldown and cooldown.Value
+
+        if cooldown then
+            pcall(function()
+                cooldown.Value = math.min(0.01, oldCooldown or 0.01)
+            end)
+        end
+
+        while S.running and S.enabled and S.magDump do
+            tool = getEquippedGun()
+            ammo = tool and tool:FindFirstChild("Ammo")
+
+            if not tool or not ammo or ammo.Value <= 0 then
+                break
+            end
+
+            if S.shootAssist then
+                S.shootAssistUntil = tick() + 0.16
+            end
+
+            if mouse1click then
+                mouse1click()
+            elseif mouse1press and mouse1release then
+                mouse1press()
+                task.wait(0.01)
+                mouse1release()
+            else
+                break
+            end
+
+            task.wait(math.max(0.01, S.magDumpDelay))
+        end
+
+        if cooldown and oldCooldown then
+            pcall(function()
+                cooldown.Value = oldCooldown
+            end)
+        end
+
+        S.magDumping = false
+    end)
 end
 
 local function notify(title, text, kind)
@@ -359,6 +437,16 @@ shootAssistHeightSlider = controls:Slider("Shoot height", S.shootAssistHeight, 1
     saveConfig()
 end)
 
+magDumpToggle = controls:Toggle("Mag dump", S.magDump, function(on)
+    S.magDump = on and true or false
+    saveConfig()
+end)
+
+magDumpDelaySlider = controls:Slider("Dump delay", S.magDumpDelay, 0.005, 0.01, 0.2, "s", function(v)
+    S.magDumpDelay = math.max(0.01, v)
+    saveConfig()
+end)
+
 controls:Divider("Presets")
 
 controls:Button("Above map", function()
@@ -465,6 +553,12 @@ info:Label(function()
     return "Shoot height: " .. tostring(S.shootAssistHeight)
 end)
 info:Label(function()
+    return "Mag dump: " .. (S.magDump and "ON" or "OFF")
+end)
+info:Label(function()
+    return "Dump delay: " .. tostring(S.magDumpDelay) .. "s"
+end)
+info:Label(function()
     local root = getRoot()
     return "Y position: " .. (root and tostring(math.floor(root.Position.Y)) or "none")
 end)
@@ -528,7 +622,9 @@ task.spawn(function()
             break
         end
 
-        if S.enabled and S.shootAssist and mouse1 then
+        if S.enabled and S.magDump and mouse1 and not lastMouse1 then
+            startMagDump()
+        elseif S.enabled and S.shootAssist and mouse1 then
             S.shootAssistUntil = tick() + 0.16
             if not lastMouse1 then
                 S.snapBurstUntil = tick() + 0.25
