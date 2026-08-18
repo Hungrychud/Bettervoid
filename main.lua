@@ -55,6 +55,7 @@ local S = {
     roam = true,
     roamRadius = 900,
     roamSpeed = 8,
+    returnHeight = 3,
     anchorX = nil,
     anchorY = nil,
     anchorZ = nil,
@@ -99,7 +100,7 @@ local function setEnabled(on)
         if root then
             pcall(function()
                 if S.anchorX and S.anchorY and S.anchorZ then
-                    root.CFrame = CFrame.new(S.anchorX, S.anchorY + 3, S.anchorZ)
+                    root.CFrame = CFrame.new(S.anchorX, S.anchorY + S.returnHeight, S.anchorZ)
                 end
                 root.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
                 root.CanCollide = true
@@ -211,6 +212,10 @@ end)
 
 controls:Slider("Roam speed", 8, 1, 1, 40, "", function(v)
     S.roamSpeed = math.floor(v)
+end)
+
+controls:Slider("Return height", 3, 1, 0, 50, " studs", function(v)
+    S.returnHeight = math.floor(v)
 end)
 
 controls:Divider("Presets")
