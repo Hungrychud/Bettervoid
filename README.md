@@ -2,27 +2,32 @@
 
 Files:
 
-- `main.lua` is the INS-ui styled GUI and safer void loop.
-- `loader.lua` is the pasteable loadstring template.
+- `main.lua` is the INS-ui styled GUI and client-side movement helper.
+- `loader.lua` is the pasteable GitHub raw loader.
 
 ## Controls
 
 - `P` opens and closes the INS-ui menu.
 - `V` toggles the void loop.
 - `X` unloads the script and removes the GUI.
-- Use the GUI sliders to change depth, tick delay, and fall velocity.
-- Start with the `Under map` preset. `Deep void` is more likely to trigger snapback.
+- Use the GUI sliders to change height, tick delay, velocity, roam, shooting stabilizer, and stomp settings.
 
-## Void presets
+## Notes
 
-- `Under map`: `-650`, safer against server snapback.
-- `Low void`: `-2500`, stronger but may be corrected on some servers.
-- `Deep void`: `-10000`, aggressive and most likely to be snapped back.
+- This is a client-side script. Server-authoritative systems, such as damage validation, may ignore client-only rapid-fire attempts.
+- `Visual rapid fire` is off by default because it can show extra local shots without server damage registration.
+- `Auto stomp` uses the existing `MainGameEvent` stomp action and depends on what the live server accepts.
+
+## Presets
+
+- `Above map`: moderate height and safer default movement.
+- `High sky`: stronger vertical offset.
+- `Very high`: aggressive and more likely to trigger server correction.
 - `Anti snapback` briefly pulses faster if your character gets corrected near the surface, then stops the void loop if the server keeps snapping you back.
 
 ## Loadstring
 
-Upload `main.lua` to GitHub, then use this raw GitHub URL:
+`loader.lua` always loads the GitHub raw copy below. Local edits to `main.lua` will not run through the loader until you update that GitHub file.
 
 ```lua
 loadstring(game:HttpGet("https://raw.githubusercontent.com/Hungrychud/Bettervoid/main/main.lua"))()

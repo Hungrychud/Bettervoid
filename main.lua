@@ -57,7 +57,7 @@ local S = {
     roamSpeed = 8,
     returnHeight = 3,
     shootAssist = true,
-    instantShoot = true,
+    instantShoot = false,
     instantShootDelay = 0.01,
     instantShootBurst = 6,
     lastInstantShotAt = 0,
@@ -84,8 +84,7 @@ local S = {
     snapBurstUntil = 0,
     snapWindowUntil = 0,
     snapCount = 0,
-    lastVoidAt = 0,
-    conns = {}
+    lastVoidAt = 0
 }
 
 local CONFIG_FOLDER = "BetterVoid"
@@ -192,7 +191,7 @@ local function loadConfig(slot)
     S.instantShootDelay = math.max(0.01, math.min(0.2, S.instantShootDelay))
     S.instantShootBurst = math.max(1, math.min(20, math.floor(S.instantShootBurst)))
     S.shootHoldTime = math.max(0.05, math.min(2, S.shootHoldTime))
-    S.stompRange = math.max(10, math.min(1000, S.stompRange))
+    S.stompRange = math.max(10, math.min(10000, S.stompRange))
     S.stompHeight = math.max(0, math.min(8, S.stompHeight))
     S.stompDelay = math.max(0.1, math.min(2, S.stompDelay))
     S.stompRepeats = math.max(1, math.min(20, math.floor(S.stompRepeats)))
@@ -654,17 +653,17 @@ shootAssistToggle = shootingControls:Toggle("Aim stabilizer", S.shootAssist, fun
     saveConfig()
 end)
 
-shootingControls:Toggle("Instant shoot", S.instantShoot, function(on)
+shootingControls:Toggle("Visual rapid fire", S.instantShoot, function(on)
     S.instantShoot = on and true or false
     saveConfig()
 end)
 
-shootingControls:Slider("Shoot delay", S.instantShootDelay, 0.005, 0.01, 0.2, "s", function(v)
+shootingControls:Slider("Visual fire delay", S.instantShootDelay, 0.005, 0.01, 0.2, "s", function(v)
     S.instantShootDelay = math.max(0.01, v)
     saveConfig()
 end)
 
-shootingControls:Slider("Shoot burst", S.instantShootBurst, 1, 1, 20, "", function(v)
+shootingControls:Slider("Visual fire burst", S.instantShootBurst, 1, 1, 20, "", function(v)
     S.instantShootBurst = math.max(1, math.floor(v))
     saveConfig()
 end)
@@ -833,13 +832,13 @@ info:Label(function()
     return "Aim stabilizer: " .. (S.shootAssist and "ON" or "OFF")
 end)
 info:Label(function()
-    return "Instant shoot: " .. (S.instantShoot and "ON" or "OFF")
+    return "Visual rapid fire: " .. (S.instantShoot and "ON" or "OFF")
 end)
 info:Label(function()
-    return "Shoot delay: " .. tostring(S.instantShootDelay) .. "s"
+    return "Visual fire delay: " .. tostring(S.instantShootDelay) .. "s"
 end)
 info:Label(function()
-    return "Shoot burst: " .. tostring(S.instantShootBurst)
+    return "Visual fire burst: " .. tostring(S.instantShootBurst)
 end)
 info:Label(function()
     return "Stabilize on aim: " .. (S.stabilizeOnAim and "ON" or "OFF")
@@ -877,14 +876,6 @@ end):SetRisk()
 function S.unload()
     S.enabled = false
     S.running = false
-
-    for _, c in ipairs(S.conns) do
-        if c and c.Disconnect then
-            pcall(function()
-                c:Disconnect()
-            end)
-        end
-    end
 
     if win then
         pcall(function()
