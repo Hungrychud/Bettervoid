@@ -57,8 +57,9 @@ local S = {
     roamSpeed = 8,
     returnHeight = 3,
     shootAssist = true,
-    shootHoldTime = 0.22,
+    shootHoldTime = 0.35,
     stabilizeOnAim = true,
+    faceCameraOnAim = true,
     shootAssistUntil = 0,
     shootLockX = nil,
     shootLockY = nil,
@@ -95,6 +96,7 @@ local CONFIG_KEYS = {
     "shootAssist",
     "shootHoldTime",
     "stabilizeOnAim",
+    "faceCameraOnAim",
     "autoStomp",
     "stompRange",
     "stompHeight",
@@ -177,7 +179,7 @@ local function loadConfig(slot)
     S.roamRadius = math.max(100, math.min(5000, S.roamRadius))
     S.roamSpeed = math.max(1, math.min(40, S.roamSpeed))
     S.returnHeight = math.max(0, math.min(50, S.returnHeight))
-    S.shootHoldTime = math.max(0.05, math.min(1, S.shootHoldTime))
+    S.shootHoldTime = math.max(0.05, math.min(2, S.shootHoldTime))
     S.stompRange = math.max(10, math.min(1000, S.stompRange))
     S.stompHeight = math.max(0, math.min(8, S.stompHeight))
     S.stompDelay = math.max(0.1, math.min(2, S.stompDelay))
@@ -218,6 +220,33 @@ local notify
 local function getRoot()
     local char = lp and lp.Character
     return char and char:FindFirstChild("HumanoidRootPart")
+end
+
+local function getCamera()
+    if not workspace then
+        return nil
+    end
+
+    local cam = workspace:FindFirstChildOfClass("Camera")
+    if cam then
+        return cam
+    end
+
+    return workspace:FindFirstChild("Camera")
+end
+
+local function getAimLockCFrame(pos)
+    if not S.faceCameraOnAim then
+        return CFrame.new(pos)
+    end
+
+    local cam = getCamera()
+    local look = cam and cam.CFrame and cam.CFrame.LookVector
+    if look and look.Magnitude > 0 then
+        return CFrame.lookAt(pos, pos + look)
+    end
+
+    return CFrame.new(pos)
 end
 
 local function getCharacterRoot(char)
@@ -473,6 +502,11 @@ shootingControls:Toggle("Stabilize on aim", S.stabilizeOnAim, function(on)
     saveConfig()
 end)
 
+shootingControls:Toggle("Face freecam aim", S.faceCameraOnAim, function(on)
+    S.faceCameraOnAim = on and true or false
+    saveConfig()
+end)
+
 shootingControls:Slider("Hold time", S.shootHoldTime, 0.01, 0.05, 2, "s", function(v)
     S.shootHoldTime = math.max(0.05, v)
     saveConfig()
@@ -628,6 +662,9 @@ info:Label(function()
 end)
 info:Label(function()
     return "Stabilize on aim: " .. (S.stabilizeOnAim and "ON" or "OFF")
+end)
+info:Label(function()
+    return "Face freecam aim: " .. (S.faceCameraOnAim and "ON" or "OFF")
 end)
 info:Label(function()
     return "Hold time: " .. tostring(S.shootHoldTime) .. "s"
@@ -795,7 +832,8 @@ task.spawn(function()
                             S.shootLockY = root.Position.Y
                             S.shootLockZ = root.Position.Z
                         end
-                        root.CFrame = CFrame.new(S.shootLockX, S.shootLockY, S.shootLockZ)
+                        local lockPos = Vector3.new(S.shootLockX, S.shootLockY, S.shootLockZ)
+                        root.CFrame = getAimLockCFrame(lockPos)
                         root.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
                         root.CanCollide = true
                     else
