@@ -62,6 +62,7 @@ local S = {
     shootLockX = nil,
     shootLockY = nil,
     shootLockZ = nil,
+    targetHoldUntil = 0,
     autoStomp = false,
     stompRange = 350,
     stompHeight = 1,
@@ -247,14 +248,30 @@ end
 
 local function teleportToSelectedTarget()
     local root = getRoot()
-    local targetRoot = getSelectedTargetRoot()
+    local targetRoot, targetPlayer = getSelectedTargetRoot()
 
-    if not root or not targetRoot then
-        return false
+    if not S.selectedPlayer then
+        return false, "no selected player"
+    end
+
+    if not root then
+        return false, "your body is missing"
+    end
+
+    if not targetPlayer then
+        return false, "target left"
+    end
+
+    if not targetRoot then
+        return false, "target body missing"
     end
 
     local targetCf = targetRoot.CFrame
     local pos = targetRoot.Position + Vector3.new(0, S.stickHeight, 0) - targetCf.LookVector * S.stickBehind
+    S.targetHoldUntil = tick() + 0.75
+    S.shootLockX = pos.X
+    S.shootLockY = pos.Y
+    S.shootLockZ = pos.Z
 
     pcall(function()
         root.CFrame = CFrame.new(pos, targetRoot.Position)
@@ -262,7 +279,7 @@ local function teleportToSelectedTarget()
         root.CanCollide = false
     end)
 
-    return true
+    return true, targetPlayer
 end
 
 local function isKnocked(char)
@@ -498,10 +515,11 @@ local function addPlayerActions(plr)
     playerListSection:Button("Teleport " .. plr.Name, function()
         if plr.Parent then
             S.selectedPlayer = plr.Name
-            if teleportToSelectedTarget() then
+            local ok, err = teleportToSelectedTarget()
+            if ok then
                 notify("Target", "teleported to " .. plr.Name, "success")
             else
-                notify("Target", "target has no body", "warning")
+                notify("Target", tostring(err), "warning")
             end
         else
             notify("Target", plr.Name .. " left", "warning")
@@ -512,10 +530,12 @@ local function addPlayerActions(plr)
         if plr.Parent then
             S.selectedPlayer = plr.Name
             S.stickToTarget = true
-            if teleportToSelectedTarget() then
+            local ok, err = teleportToSelectedTarget()
+            if ok then
                 notify("Target", "sticking to " .. plr.Name, "success")
             else
-                notify("Target", "target has no body", "warning")
+                S.stickToTarget = false
+                notify("Target", tostring(err), "warning")
             end
         else
             notify("Target", plr.Name .. " left", "warning")
@@ -556,20 +576,22 @@ playerInfoSection:Label(function()
 end)
 
 playerInfoSection:Button("Teleport selected", function()
-    if teleportToSelectedTarget() then
+    local ok, err = teleportToSelectedTarget()
+    if ok then
         notify("Target", "teleported to " .. tostring(S.selectedPlayer), "success")
     else
-        notify("Target", "select a valid player first", "warning")
+        notify("Target", tostring(err), "warning")
     end
 end)
 
 playerInfoSection:Button("Stick selected", function()
     S.stickToTarget = true
-    if teleportToSelectedTarget() then
+    local ok, err = teleportToSelectedTarget()
+    if ok then
         notify("Target", "sticking to " .. tostring(S.selectedPlayer), "success")
     else
         S.stickToTarget = false
-        notify("Target", "select a valid player first", "warning")
+        notify("Target", tostring(err), "warning")
     end
 end)
 
@@ -919,7 +941,7 @@ end)
 
 task.spawn(function()
     while S.running do
-        if S.enabled and not S.stickToTarget then
+        if S.enabled and not S.stickToTarget and tick() >= S.targetHoldUntil then
             local root = getRoot()
 
             if root then
