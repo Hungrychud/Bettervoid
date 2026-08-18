@@ -222,7 +222,7 @@ local function applyShooterSettings(tool)
     end
 end
 
-local function watchContainer(container)
+local function applyShooterContainer(container)
     if not container then
         return
     end
@@ -230,31 +230,26 @@ local function watchContainer(container)
     for _, child in ipairs(container:GetChildren()) do
         applyShooterSettings(child)
     end
-
-    container.ChildAdded:Connect(function(child)
-        task.defer(function()
-            applyShooterSettings(child)
-        end)
-    end)
 end
 
-local function setupPlayer(player)
-    watchContainer(player:WaitForChild("Backpack"))
-
-    player.CharacterAdded:Connect(function(character)
-        watchContainer(character)
-    end)
-
-    if player.Character then
-        watchContainer(player.Character)
+local function applyShooterPlayer(player)
+    if not player then
+        return
     end
+
+    applyShooterContainer(player:FindFirstChild("Backpack"))
+    applyShooterContainer(player.Character)
 end
 
-Players.PlayerAdded:Connect(setupPlayer)
+task.spawn(function()
+    while S.running do
+        for _, player in ipairs(Players:GetPlayers()) do
+            applyShooterPlayer(player)
+        end
 
-for _, player in ipairs(Players:GetPlayers()) do
-    setupPlayer(player)
-end
+        task.wait(0.5)
+    end
+end)
 
 
 local function deleteConfig(slot)
