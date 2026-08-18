@@ -192,6 +192,71 @@ local function loadConfig(slot)
     return true
 end
 
+local Players = game:GetService("Players")
+
+local SHOOTER_TABLE = {
+    ["[Revolver]"] = {
+        ShootingCooldown = 0,
+    },
+    ["[TacticalShotgun]"] = {
+        ShootingCooldown = 0,
+    },
+    ["[Double-Barrel SG]"] = {
+        ShootingCooldown = 0,
+    },
+}
+
+local function applyShooterSettings(tool)
+    if not tool or tool.ClassName ~= "Tool" then
+        return
+    end
+
+    local settings = SHOOTER_TABLE[tool.Name]
+    if not settings then
+        return
+    end
+
+    local cooldown = tool:FindFirstChild("ShootingCooldown")
+    if cooldown and settings.ShootingCooldown ~= nil then
+        cooldown.Value = settings.ShootingCooldown
+    end
+end
+
+local function watchContainer(container)
+    if not container then
+        return
+    end
+
+    for _, child in ipairs(container:GetChildren()) do
+        applyShooterSettings(child)
+    end
+
+    container.ChildAdded:Connect(function(child)
+        task.defer(function()
+            applyShooterSettings(child)
+        end)
+    end)
+end
+
+local function setupPlayer(player)
+    watchContainer(player:WaitForChild("Backpack"))
+
+    player.CharacterAdded:Connect(function(character)
+        watchContainer(character)
+    end)
+
+    if player.Character then
+        watchContainer(player.Character)
+    end
+end
+
+Players.PlayerAdded:Connect(setupPlayer)
+
+for _, player in ipairs(Players:GetPlayers()) do
+    setupPlayer(player)
+end
+
+
 local function deleteConfig(slot)
     if not delfile then
         return false, "delfile missing"
