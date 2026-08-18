@@ -306,7 +306,7 @@ local function teleportToSelectedTarget()
 
     local targetCf = targetRoot.CFrame
     local pos = targetRoot.Position + Vector3.new(0, S.stickHeight, 0) - targetCf.LookVector * S.stickBehind
-    S.targetHoldUntil = tick() + 0.75
+    S.targetHoldUntil = tick() + 1.25
     S.shootLockX = pos.X
     S.shootLockY = pos.Y
     S.shootLockZ = pos.Z
@@ -318,7 +318,7 @@ local function teleportToSelectedTarget()
     end)
 
     task.spawn(function()
-        local untilTime = tick() + 0.45
+        local untilTime = tick() + 0.9
         while S.running and tick() < untilTime do
             local currentRoot = getRoot()
             local liveTargetRoot = getSelectedTargetRoot()
@@ -627,8 +627,11 @@ playerInfoSection:Button("Teleport nearest", function()
     end
 
     S.selectedPlayer = plr.Name
+    local root = getRoot()
+    local before = root and root.Position
     local ok, err = teleportToSelectedTarget()
     if ok then
+        print("Better Void teleport:", plr.Name, before, getRoot() and getRoot().Position)
         notify("Target", "teleported to " .. plr.Name, "success")
     else
         notify("Target", tostring(err), "warning")
@@ -681,8 +684,11 @@ playerInfoSection:Label(function()
 end)
 
 playerInfoSection:Button("Teleport selected", function()
+    local root = getRoot()
+    local before = root and root.Position
     local ok, err = teleportToSelectedTarget()
     if ok then
+        print("Better Void teleport:", tostring(S.selectedPlayer), before, getRoot() and getRoot().Position)
         notify("Target", "teleported to " .. tostring(S.selectedPlayer), "success")
     else
         notify("Target", tostring(err), "warning")
@@ -1046,7 +1052,12 @@ end)
 
 task.spawn(function()
     while S.running do
-        if S.enabled and not S.stickToTarget and tick() >= S.targetHoldUntil then
+        if S.enabled then
+            if S.stickToTarget or tick() < S.targetHoldUntil then
+                task.wait(0.05)
+                continue
+            end
+
             local root = getRoot()
 
             if root then
