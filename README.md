@@ -18,7 +18,7 @@ Files:
 - `Under map`: `-650`, safer against server snapback.
 - `Low void`: `-2500`, stronger but may be corrected on some servers.
 - `Deep void`: `-10000`, aggressive and most likely to be snapped back.
-- `Anti snapback` briefly pulses faster if your character gets corrected near the surface.
+- `Anti snapback` briefly pulses faster if your character gets corrected near the surface, then stops the void loop if the server keeps snapping you back.
 
 ## Loadstring
 

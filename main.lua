@@ -21,10 +21,15 @@ local S = {
     anchorX = nil,
     anchorZ = nil,
     snapBurstUntil = 0,
+    snapWindowUntil = 0,
+    snapCount = 0,
+    lastVoidAt = 0,
     conns = {}
 }
 
 _G.BetterVoid = S
+
+local toggle
 
 local function getRoot()
     local char = lp and lp.Character
@@ -47,9 +52,53 @@ local function setEnabled(on)
             S.anchorZ = root.Position.Z
         end
         S.snapBurstUntil = tick() + 1.25
+        S.snapWindowUntil = 0
+        S.snapCount = 0
+        S.lastVoidAt = 0
+    else
+        S.anchorX = nil
+        S.anchorZ = nil
+        S.snapBurstUntil = 0
+        S.snapWindowUntil = 0
+        S.snapCount = 0
+        S.lastVoidAt = 0
+
+        local root = getRoot()
+        if root then
+            pcall(function()
+                root.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
+                root.CanCollide = true
+            end)
+        end
     end
 
     notify("Better Void", S.enabled and "enabled" or "disabled", S.enabled and "success" or "warning")
+end
+
+local function stopVoid(reason)
+    S.enabled = false
+    S.anchorX = nil
+    S.anchorZ = nil
+    S.snapBurstUntil = 0
+    S.snapWindowUntil = 0
+    S.snapCount = 0
+    S.lastVoidAt = 0
+
+    local root = getRoot()
+    if root then
+        pcall(function()
+            root.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
+            root.CanCollide = true
+        end)
+    end
+
+    if toggle and toggle.Set then
+        pcall(function()
+            toggle:Set(false)
+        end)
+    end
+
+    notify("Better Void", reason or "disabled", "warning")
 end
 
 local win = Lib:CreateWindow({
@@ -84,7 +133,7 @@ end
 local voidTab = win:Tab("Void", "shield")
 local controls = voidTab:Section("Controls", "Left", "stable void loop")
 
-local toggle = controls:Toggle("Better Void", false, function(on)
+toggle = controls:Toggle("Better Void", false, function(on)
     setEnabled(on)
 end)
 
@@ -136,10 +185,17 @@ controls:Button("Deep void", function()
 end)
 
 controls:Button("Return to origin", function()
+    S.enabled = false
     local root = getRoot()
     if root then
         root.CFrame = CFrame.new(0, 25, 0)
         root.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
+        root.CanCollide = true
+    end
+    if toggle and toggle.Set then
+        pcall(function()
+            toggle:Set(false)
+        end)
     end
 end)
 
@@ -235,11 +291,24 @@ task.spawn(function()
                     S.anchorZ = root.Position.Z
                 end
 
-                if S.antiSnap and root.Position.Y > -50 then
-                    S.snapBurstUntil = tick() + 0.8
+                local t = tick()
+                if S.antiSnap and S.lastVoidAt > 0 and root.Position.Y > -50 then
+                    if t > S.snapWindowUntil then
+                        S.snapWindowUntil = t + 4
+                        S.snapCount = 0
+                    end
+
+                    S.snapCount = S.snapCount + 1
+
+                    if S.snapCount >= 3 then
+                        stopVoid("server snapback detected; void stopped")
+                        task.wait(0.35)
+                        continue
+                    end
+
+                    S.snapBurstUntil = t + 0.45
                 end
 
-                local t = tick()
                 local burst = S.antiSnap and t < S.snapBurstUntil
                 local driftX = 0
                 local driftZ = 0
@@ -254,6 +323,7 @@ task.spawn(function()
                     root.AssemblyLinearVelocity = Vector3.new(0, S.velocity, 0)
                     root.CanCollide = false
                 end)
+                S.lastVoidAt = t
 
                 if burst then
                     task.wait(0.045)
