@@ -137,11 +137,57 @@ local function loadConfig()
     return true
 end
 
+local function deleteConfig()
+    if not delfile then
+        return false, "delfile missing"
+    end
+
+    if not isfile or not isfile(CONFIG_FILE) then
+        return false, "no config to delete"
+    end
+
+    local ok, err = pcall(function()
+        delfile(CONFIG_FILE)
+    end)
+
+    return ok, err
+end
+
 local loadedConfig = loadConfig()
 
 _G.BetterVoid = S
 
 local toggle
+local heightSlider
+local rateSlider
+local velocitySlider
+local antiSnapToggle
+local roamToggle
+local roamRadiusSlider
+local roamSpeedSlider
+local returnHeightSlider
+
+local function syncConfigControls()
+    local pairsToSync = {
+        { heightSlider, S.height },
+        { rateSlider, S.rate },
+        { velocitySlider, S.velocity },
+        { antiSnapToggle, S.antiSnap },
+        { roamToggle, S.roam },
+        { roamRadiusSlider, S.roamRadius },
+        { roamSpeedSlider, S.roamSpeed },
+        { returnHeightSlider, S.returnHeight }
+    }
+
+    for _, item in ipairs(pairsToSync) do
+        local control = item[1]
+        if control and control.Set then
+            pcall(function()
+                control:Set(item[2])
+            end)
+        end
+    end
+end
 
 local function getRoot()
     local char = lp and lp.Character
@@ -236,17 +282,11 @@ local win = Lib:CreateWindow({
     keybindOverlay = true,
     backgroundEffect = "Rain",
     backgroundEffectColor = Color3.fromRGB(80, 170, 255),
-    configName = "bettervoid",
-    configFolder = "BetterVoid",
-    autoSave = true,
+    autoSave = false,
     smartFps = true,
     gameInput = false,
     startOpen = true
 })
-
-if win.AddSettingsTab then
-    win:AddSettingsTab("cog")
-end
 
 local voidTab = win:Tab("Void", "shield")
 local controls = voidTab:Section("Controls", "Left", "stable void loop")
@@ -259,42 +299,42 @@ if toggle and toggle.AddKeybind then
     toggle:AddKeybind("v", "Toggle")
 end
 
-controls:Slider("Up height", S.height, 25, 100, 10000, "", function(v)
+heightSlider = controls:Slider("Up height", S.height, 25, 100, 10000, "", function(v)
     S.height = math.floor(v)
     saveConfig()
 end)
 
-controls:Slider("Tick delay", S.rate, 0.01, 0.03, 0.5, "s", function(v)
+rateSlider = controls:Slider("Tick delay", S.rate, 0.01, 0.03, 0.5, "s", function(v)
     S.rate = math.max(0.03, v)
     saveConfig()
 end)
 
-controls:Slider("Up velocity", S.velocity, 100, 500, 5000, "", function(v)
+velocitySlider = controls:Slider("Up velocity", S.velocity, 100, 500, 5000, "", function(v)
     S.velocity = math.floor(v)
     saveConfig()
 end)
 
-controls:Toggle("Anti snapback", S.antiSnap, function(on)
+antiSnapToggle = controls:Toggle("Anti snapback", S.antiSnap, function(on)
     S.antiSnap = on and true or false
     saveConfig()
 end)
 
-controls:Toggle("Map roam", S.roam, function(on)
+roamToggle = controls:Toggle("Map roam", S.roam, function(on)
     S.roam = on and true or false
     saveConfig()
 end)
 
-controls:Slider("Roam radius", S.roamRadius, 50, 100, 5000, "", function(v)
+roamRadiusSlider = controls:Slider("Roam radius", S.roamRadius, 50, 100, 5000, "", function(v)
     S.roamRadius = math.floor(v)
     saveConfig()
 end)
 
-controls:Slider("Roam speed", S.roamSpeed, 1, 1, 40, "", function(v)
+roamSpeedSlider = controls:Slider("Roam speed", S.roamSpeed, 1, 1, 40, "", function(v)
     S.roamSpeed = math.floor(v)
     saveConfig()
 end)
 
-controls:Slider("Return height", S.returnHeight, 1, 0, 50, " studs", function(v)
+returnHeightSlider = controls:Slider("Return height", S.returnHeight, 1, 0, 50, " studs", function(v)
     S.returnHeight = math.floor(v)
     saveConfig()
 end)
@@ -331,15 +371,6 @@ controls:Button("Very high", function()
     notify("Preset", "very high selected", "warning")
 end)
 
-controls:Button("Save config", function()
-    local ok, err = saveConfig()
-    if ok then
-        notify("Config", "saved", "success")
-    else
-        notify("Config", "save failed: " .. tostring(err), "error")
-    end
-end)
-
 controls:Button("Return to origin", function()
     S.enabled = false
     local root = getRoot()
@@ -354,6 +385,39 @@ controls:Button("Return to origin", function()
         end)
     end
 end)
+
+local configSection = voidTab:Section("Config", "Right", "BetterVoid/bettervoid.cfg")
+configSection:Button("Save", function()
+    local ok, err = saveConfig()
+    if ok then
+        notify("Config", "saved", "success")
+    else
+        notify("Config", "save failed: " .. tostring(err), "error")
+    end
+end)
+
+configSection:Button("Load", function()
+    local ok, err = loadConfig()
+    if ok then
+        syncConfigControls()
+        notify("Config", "loaded", "success")
+    else
+        notify("Config", "load failed: " .. tostring(err or "file missing"), "error")
+    end
+end)
+
+local deleteButton = configSection:Button("Delete", function()
+    local ok, err = deleteConfig()
+    if ok then
+        notify("Config", "deleted", "warning")
+    else
+        notify("Config", "delete failed: " .. tostring(err), "error")
+    end
+end)
+
+if deleteButton and deleteButton.SetRisk then
+    deleteButton:SetRisk()
+end
 
 local info = voidTab:Section("Status", "Right", "live values")
 info:Label(function()
