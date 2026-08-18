@@ -240,10 +240,48 @@ local function getSelectedPlayer()
     return nil
 end
 
+local function getCharacterByName(name)
+    if not name then
+        return nil
+    end
+
+    local playersFolder = workspace and workspace:FindFirstChild("Players")
+    if playersFolder then
+        return playersFolder:FindFirstChild(name)
+    end
+
+    return workspace and workspace:FindFirstChild(name)
+end
+
 local function getSelectedTargetRoot()
     local plr = getSelectedPlayer()
-    local char = plr and plr.Character
+    local char = (plr and plr.Character) or getCharacterByName(S.selectedPlayer)
     return getCharacterRoot(char), plr
+end
+
+local function getNearestPlayer()
+    local localRoot = getRoot()
+    if not localRoot then
+        return nil
+    end
+
+    local bestPlayer
+    local bestDist = math.huge
+
+    for _, plr in ipairs(Players:GetPlayers()) do
+        if plr.UserId ~= lp.UserId then
+            local root = getCharacterRoot(plr.Character or getCharacterByName(plr.Name))
+            if root then
+                local dist = (root.Position - localRoot.Position).Magnitude
+                if dist < bestDist then
+                    bestPlayer = plr
+                    bestDist = dist
+                end
+            end
+        end
+    end
+
+    return bestPlayer, bestDist
 end
 
 local function teleportToSelectedTarget()
@@ -258,7 +296,7 @@ local function teleportToSelectedTarget()
         return false, "your body is missing"
     end
 
-    if not targetPlayer then
+    if not targetPlayer and not getCharacterByName(S.selectedPlayer) then
         return false, "target left"
     end
 
@@ -277,6 +315,29 @@ local function teleportToSelectedTarget()
         root.CFrame = CFrame.new(pos, targetRoot.Position)
         root.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
         root.CanCollide = false
+    end)
+
+    task.spawn(function()
+        local untilTime = tick() + 0.45
+        while S.running and tick() < untilTime do
+            local currentRoot = getRoot()
+            local liveTargetRoot = getSelectedTargetRoot()
+
+            if not currentRoot or not liveTargetRoot then
+                break
+            end
+
+            local liveCf = liveTargetRoot.CFrame
+            local livePos = liveTargetRoot.Position + Vector3.new(0, S.stickHeight, 0) - liveCf.LookVector * S.stickBehind
+
+            pcall(function()
+                currentRoot.CFrame = CFrame.new(livePos, liveTargetRoot.Position)
+                currentRoot.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
+                currentRoot.CanCollide = false
+            end)
+
+            task.wait(0.04)
+        end
     end)
 
     return true, targetPlayer
@@ -558,6 +619,40 @@ playerInfoSection:Label(function()
     return "Stick: " .. (S.stickToTarget and "ON" or "OFF")
 end)
 
+playerInfoSection:Button("Teleport nearest", function()
+    local plr = getNearestPlayer()
+    if not plr then
+        notify("Target", "no nearby player found", "warning")
+        return
+    end
+
+    S.selectedPlayer = plr.Name
+    local ok, err = teleportToSelectedTarget()
+    if ok then
+        notify("Target", "teleported to " .. plr.Name, "success")
+    else
+        notify("Target", tostring(err), "warning")
+    end
+end)
+
+playerInfoSection:Button("Stick nearest", function()
+    local plr = getNearestPlayer()
+    if not plr then
+        notify("Target", "no nearby player found", "warning")
+        return
+    end
+
+    S.selectedPlayer = plr.Name
+    S.stickToTarget = true
+    local ok, err = teleportToSelectedTarget()
+    if ok then
+        notify("Target", "sticking to " .. plr.Name, "success")
+    else
+        S.stickToTarget = false
+        notify("Target", tostring(err), "warning")
+    end
+end)
+
 playerInfoSection:Label(function()
     local plr
     for _, item in ipairs(Players:GetPlayers()) do
@@ -573,6 +668,16 @@ playerInfoSection:Label(function()
 
     local char = plr.Character
     return "Target status: " .. (isKnocked(char) and "KO" or "active")
+end)
+
+playerInfoSection:Label(function()
+    local root = getSelectedTargetRoot()
+    if not root then
+        return "Target body: missing"
+    end
+
+    local pos = root.Position
+    return "Target body: " .. tostring(math.floor(pos.X)) .. ", " .. tostring(math.floor(pos.Y)) .. ", " .. tostring(math.floor(pos.Z))
 end)
 
 playerInfoSection:Button("Teleport selected", function()
