@@ -197,6 +197,7 @@ _G.BetterVoid = S
 local toggle
 local shootAssistToggle
 local magDumpToggle
+local notify
 
 local function getRoot()
     local char = lp and lp.Character
@@ -226,8 +227,18 @@ local function startMagDump()
     S.magDumping = true
 
     task.spawn(function()
+        local ReplicatedStorage = game:GetService("ReplicatedStorage")
+        local mainRemote = ReplicatedStorage and ReplicatedStorage:FindFirstChild("GameRemotes") and ReplicatedStorage.GameRemotes:FindFirstChild("MainGameEvent")
+        local gunHandler
+        pcall(function()
+            gunHandler = require(ReplicatedStorage.Modules.GunHandler)
+        end)
+
         local tool = getEquippedGun()
         local ammo = tool and tool:FindFirstChild("Ammo")
+        local handle = tool and tool:FindFirstChild("Handle")
+        local range = tool and tool:FindFirstChild("Range")
+        local damage = tool and tool:FindFirstChild("Damage")
         local cooldown = tool and tool:FindFirstChild("ShootingCooldown")
         local oldCooldown = cooldown and cooldown.Value
 
@@ -237,29 +248,82 @@ local function startMagDump()
             end)
         end
 
-        while S.running and S.enabled and S.magDump do
-            tool = getEquippedGun()
-            ammo = tool and tool:FindFirstChild("Ammo")
+        if not tool or not ammo or not handle or not range or not damage or not mainRemote or not gunHandler then
+            if cooldown and oldCooldown then
+                pcall(function()
+                    cooldown.Value = oldCooldown
+                end)
+            end
+            notify("Mag dump", "gun data missing", "error")
+            S.magDumping = false
+            return
+        end
 
-            if not tool or not ammo or ammo.Value <= 0 then
+        local shotCount = math.max(1, math.floor(ammo.Value))
+        local offset = CFrame.new(-1, 0.4, 0)
+        if tool.Name == "[Double-Barrel SG]" or tool.Name == "[TacticalShotgun]" then
+            offset = CFrame.new(0, 0.35, -2.2)
+        end
+
+        if S.shootAssist then
+            S.shootAssistUntil = tick() + 0.25
+            task.wait(0.03)
+        end
+
+        for i = 1, shotCount do
+            if not S.running or not S.enabled or not S.magDump then
                 break
             end
 
-            if S.shootAssist then
-                S.shootAssistUntil = tick() + 0.16
+            local origin = (handle.CFrame * offset).Position
+            local muzzle = tool:FindFirstChild("Default") and tool.Default:FindFirstChild("Mesh") and tool.Default.Mesh:FindFirstChild("Muzzle")
+            if muzzle then
+                origin = muzzle.WorldPosition
             end
 
-            if mouse1click then
-                mouse1click()
-            elseif mouse1press and mouse1release then
-                mouse1press()
-                task.wait(0.01)
-                mouse1release()
+            if tool.Name == "[Double-Barrel SG]" or tool.Name == "[TacticalShotgun]" then
+                local pellets = {}
+                for _ = 1, 5 do
+                    local spreadX = (math.random() - 0.5) * 0.1
+                    local spreadY = (math.random() - 0.5) * 0.1
+                    local spreadZ = (math.random() - 0.5) * 0.1
+                    local aim = origin + (gunHandler.GetAim(origin) + Vector3.new(spreadX, spreadY, spreadZ)) * range.Value
+                    local hit, pos, normal = gunHandler.Shoot({
+                        Shooter = lp.Character,
+                        Handle = handle,
+                        ForcedOrigin = origin,
+                        AimPosition = aim,
+                        BeamColor = Color3.new(1, 0.94902, 0.352941),
+                        Range = range.Value
+                    })
+                    pellets[#pellets + 1] = {
+                        AimPosition = aim,
+                        Result1 = hit,
+                        Result2 = pos,
+                        Result3 = normal
+                    }
+                end
+
+                mainRemote:FireServer("ShootGun", handle, origin, pellets, nil, nil, nil, range.Value, damage.Value)
             else
-                break
+                local aim = origin + gunHandler.GetAim(origin) * 200
+                local hit, pos, normal = gunHandler.Shoot({
+                    Shooter = lp.Character,
+                    Handle = handle,
+                    ForcedOrigin = origin,
+                    AimPosition = aim,
+                    BeamColor = Color3.new(1, 0.94902, 0.352941),
+                    Range = range.Value
+                })
+
+                mainRemote:FireServer("ShootGun", handle, origin, nil, hit, pos, normal, range.Value, damage.Value)
             end
 
-            task.wait(math.max(0.001, S.magDumpDelay))
+            if S.magDumpDelay > 0.001 then
+                task.wait(S.magDumpDelay)
+            elseif i % 8 == 0 then
+                task.wait()
+            end
         end
 
         if cooldown and oldCooldown then
@@ -272,7 +336,7 @@ local function startMagDump()
     end)
 end
 
-local function notify(title, text, kind)
+notify = function(title, text, kind)
     if Lib and Lib.Notify then
         Lib:Notify(title, text, 2, kind or "info")
     end
