@@ -14,10 +14,12 @@ local S = {
     enabled = false,
     running = true,
     depth = -650,
-    rate = 0.18,
+    rate = 0.08,
     velocity = -1200,
     antiSnap = true,
-    drift = true,
+    roam = true,
+    roamRadius = 900,
+    roamSpeed = 8,
     anchorX = nil,
     anchorZ = nil,
     snapBurstUntil = 0,
@@ -145,8 +147,8 @@ controls:Slider("Depth", 650, 25, 100, 10000, "", function(v)
     S.depth = -math.floor(v)
 end)
 
-controls:Slider("Tick delay", 0.18, 0.01, 0.10, 0.5, "s", function(v)
-    S.rate = math.max(0.12, v)
+controls:Slider("Tick delay", 0.08, 0.01, 0.03, 0.5, "s", function(v)
+    S.rate = math.max(0.03, v)
 end)
 
 controls:Slider("Fall velocity", 1200, 100, 500, 5000, "", function(v)
@@ -157,30 +159,44 @@ controls:Toggle("Anti snapback", true, function(on)
     S.antiSnap = on and true or false
 end)
 
-controls:Toggle("Small drift", true, function(on)
-    S.drift = on and true or false
+controls:Toggle("Map roam", true, function(on)
+    S.roam = on and true or false
+end)
+
+controls:Slider("Roam radius", 900, 50, 100, 5000, "", function(v)
+    S.roamRadius = math.floor(v)
+end)
+
+controls:Slider("Roam speed", 8, 1, 1, 40, "", function(v)
+    S.roamSpeed = math.floor(v)
 end)
 
 controls:Divider("Presets")
 
 controls:Button("Under map", function()
     S.depth = -650
-    S.rate = 0.18
+    S.rate = 0.08
     S.velocity = -1200
+    S.roamRadius = 900
+    S.roamSpeed = 8
     notify("Preset", "under map selected", "success")
 end)
 
 controls:Button("Low void", function()
     S.depth = -2500
-    S.rate = 0.16
+    S.rate = 0.06
     S.velocity = -1800
+    S.roamRadius = 1400
+    S.roamSpeed = 11
     notify("Preset", "low void selected", "info")
 end)
 
 controls:Button("Deep void", function()
     S.depth = -10000
-    S.rate = 0.14
+    S.rate = 0.05
     S.velocity = -2500
+    S.roamRadius = 2200
+    S.roamSpeed = 15
     notify("Preset", "deep void selected", "warning")
 end)
 
@@ -211,6 +227,12 @@ info:Label(function()
 end)
 info:Label(function()
     return "Anti snap: " .. (S.antiSnap and "ON" or "OFF")
+end)
+info:Label(function()
+    return "Roam: " .. (S.roam and "ON" or "OFF")
+end)
+info:Label(function()
+    return "Radius: " .. tostring(S.roamRadius)
 end)
 info:Label(function()
     local root = getRoot()
@@ -310,16 +332,17 @@ task.spawn(function()
                 end
 
                 local burst = S.antiSnap and t < S.snapBurstUntil
-                local driftX = 0
-                local driftZ = 0
+                local offsetX = 0
+                local offsetZ = 0
 
-                if S.drift then
-                    driftX = math.sin(t * 2.5) * 8
-                    driftZ = math.cos(t * 2.5) * 8
+                if S.roam then
+                    local phase = t * S.roamSpeed
+                    offsetX = (math.cos(phase) * S.roamRadius) + (math.sin(phase * 1.7) * S.roamRadius * 0.35)
+                    offsetZ = (math.sin(phase) * S.roamRadius) + (math.cos(phase * 1.3) * S.roamRadius * 0.35)
                 end
 
                 pcall(function()
-                    root.CFrame = CFrame.new(S.anchorX + driftX, S.depth, S.anchorZ + driftZ)
+                    root.CFrame = CFrame.new(S.anchorX + offsetX, S.depth, S.anchorZ + offsetZ)
                     root.AssemblyLinearVelocity = Vector3.new(0, S.velocity, 0)
                     root.CanCollide = false
                 end)
