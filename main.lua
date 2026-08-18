@@ -67,11 +67,13 @@ local S = {
     autoStomp = false,
     stompHoldUntil = 0,
     stompRange = 350,
-    stompHeight = 1,
-    stompDelay = 0.35,
+    stompHeight = 3,
+    stompDelay = 0.9,
     stompRepeats = 6,
-    stompInterval = 0.08,
+    stompInterval = 0.85,
     lastStompAt = 0,
+    lastStompDebugAt = 0,
+    lastStompStatus = "idle",
     anchorX = nil,
     anchorY = nil,
     anchorZ = nil,
@@ -181,10 +183,10 @@ local function loadConfig(slot)
     S.returnHeight = math.max(0, math.min(50, S.returnHeight))
     S.shootHoldTime = math.max(0.05, math.min(2, S.shootHoldTime))
     S.stompRange = math.max(10, math.min(1000, S.stompRange))
-    S.stompHeight = math.max(0, math.min(8, S.stompHeight))
-    S.stompDelay = math.max(0.1, math.min(2, S.stompDelay))
+    S.stompHeight = math.max(1, math.min(8, S.stompHeight))
+    S.stompDelay = math.max(0.8, math.min(3, S.stompDelay))
     S.stompRepeats = math.max(1, math.min(20, math.floor(S.stompRepeats)))
-    S.stompInterval = math.max(0.03, math.min(0.5, S.stompInterval))
+    S.stompInterval = math.max(0.8, math.min(3, S.stompInterval))
 
     return true
 end
@@ -228,6 +230,42 @@ end
 
 local function getHumanoidRootPart(char)
     return char and char:FindFirstChild("HumanoidRootPart")
+end
+
+local function getStompOriginPart(char)
+    if not char then
+        return nil
+    end
+
+    return char:FindFirstChild("LowerTorso") or char:FindFirstChild("UpperTorso") or char:FindFirstChild("Torso") or char:FindFirstChild("HumanoidRootPart")
+end
+
+local function stompRayHitsTarget(targetChar)
+    local char = lp and lp.Character
+    local originPart = getStompOriginPart(char)
+    local upper = char and char:FindFirstChild("UpperTorso")
+
+    if not workspace or not targetChar or not originPart then
+        return false
+    end
+
+    local distance = 8
+    if upper and upper.Size and upper.Size.Y then
+        distance = upper.Size.Y * 4.5
+    end
+
+    local ok, hit = pcall(function()
+        local params = RaycastParams.new()
+        params.FilterDescendantsInstances = { char }
+        params.FilterType = Enum.RaycastFilterType.Exclude
+        return workspace:Raycast(originPart.Position, Vector3.new(0, -distance, 0), params)
+    end)
+
+    if not ok then
+        return true
+    end
+
+    return hit and hit.Instance and hit.Instance:IsDescendantOf(targetChar)
 end
 
 local function isKnocked(char)
@@ -275,40 +313,70 @@ local function getNearestKnockedTarget(maxRange)
     return bestChar, bestRoot, bestDist
 end
 
-local function stompTarget(targetRoot)
+local function stompTarget(targetChar, targetRoot)
     local root = getRoot()
+    local char = lp and lp.Character
+    local stompOrigin = getStompOriginPart(char)
     local ReplicatedStorage = game:GetService("ReplicatedStorage")
     local remotes = ReplicatedStorage and ReplicatedStorage:FindFirstChild("GameRemotes")
     local mainRemote = remotes and remotes:FindFirstChild("MainGameEvent")
 
-    if not root or not targetRoot or not mainRemote then
+    if not root or not targetChar or not targetRoot or not stompOrigin or not mainRemote then
+        S.lastStompStatus = "missing root/origin/remote"
         return false
     end
 
-    local holdTime = (S.stompRepeats * S.stompInterval) + 0.65
+    local holdTime = (S.stompRepeats * S.stompInterval) + 1
     S.stompHoldUntil = tick() + holdTime
+    S.lastStompStatus = "moving to body"
 
     for _ = 1, S.stompRepeats do
         root = getRoot()
-        if not root or not targetRoot then
+        char = lp and lp.Character
+        stompOrigin = getStompOriginPart(char)
+        if not root or not targetChar or not targetRoot or not stompOrigin then
+            S.lastStompStatus = "lost body"
             break
         end
 
-        local stompPos = targetRoot.Position + Vector3.new(0, S.stompHeight, 0)
-        S.shootLockCFrame = CFrame.new(stompPos)
-        S.shootLockX = stompPos.X
-        S.shootLockY = stompPos.Y
-        S.shootLockZ = stompPos.Z
+        local stompOriginOffsetY = stompOrigin.Position.Y - root.Position.Y
+        local offsets = { 0, 1.25, -0.75 }
+        local rayReady = false
 
-        pcall(function()
-            root.CFrame = CFrame.new(stompPos)
-            root.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
-            root.CanCollide = true
-        end)
+        for _, offset in ipairs(offsets) do
+            local rootY = targetRoot.Position.Y + S.stompHeight + offset - stompOriginOffsetY
+            local stompPos = Vector3.new(targetRoot.Position.X, rootY, targetRoot.Position.Z)
+            local stompCf = CFrame.new(stompPos)
 
-        task.wait(0.03)
+            S.stompHoldUntil = tick() + math.max(1, S.stompInterval + 0.25)
+            S.shootLockCFrame = stompCf
+            S.shootLockX = stompPos.X
+            S.shootLockY = stompPos.Y
+            S.shootLockZ = stompPos.Z
+
+            pcall(function()
+                root.CFrame = stompCf
+                root.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
+                root.CanCollide = true
+            end)
+
+            task.wait(0.2)
+            if stompRayHitsTarget(targetChar) then
+                rayReady = true
+                break
+            end
+        end
+
+        if not rayReady then
+            S.lastStompStatus = "ray not over body"
+            break
+        end
+
+        S.lastStompStatus = "firing stomp"
+        task.wait(0.55)
         mainRemote:FireServer("Stomp")
-        task.wait(math.max(0.03, S.stompInterval - 0.03))
+        S.lastStompStatus = "stomp fired"
+        task.wait(math.max(0.05, S.stompInterval - 0.75))
     end
 
     return true
@@ -501,13 +569,13 @@ shootingControls:Slider("Stomp range", S.stompRange, 5, 10, 1000, " studs", func
     saveConfig()
 end)
 
-shootingControls:Slider("Stomp height", S.stompHeight, 0.5, 0, 8, " studs", function(v)
-    S.stompHeight = math.max(0, v)
+shootingControls:Slider("Stomp height", S.stompHeight, 0.5, 1, 8, " studs", function(v)
+    S.stompHeight = math.max(1, v)
     saveConfig()
 end)
 
-shootingControls:Slider("Stomp delay", S.stompDelay, 0.05, 0.1, 2, "s", function(v)
-    S.stompDelay = math.max(0.1, v)
+shootingControls:Slider("Stomp delay", S.stompDelay, 0.05, 0.8, 3, "s", function(v)
+    S.stompDelay = math.max(0.8, v)
     saveConfig()
 end)
 
@@ -516,8 +584,8 @@ shootingControls:Slider("Stomp repeats", S.stompRepeats, 1, 1, 20, "", function(
     saveConfig()
 end)
 
-shootingControls:Slider("Repeat interval", S.stompInterval, 0.01, 0.03, 0.5, "s", function(v)
-    S.stompInterval = math.max(0.03, v)
+shootingControls:Slider("Repeat interval", S.stompInterval, 0.05, 0.8, 3, "s", function(v)
+    S.stompInterval = math.max(0.8, v)
     saveConfig()
 end)
 
@@ -658,6 +726,9 @@ info:Label(function()
     return "Stomp repeats: " .. tostring(S.stompRepeats)
 end)
 info:Label(function()
+    return "Stomp status: " .. tostring(S.lastStompStatus)
+end)
+info:Label(function()
     local root = getRoot()
     return "Y position: " .. (root and tostring(math.floor(root.Position.Y)) or "none")
 end)
@@ -749,9 +820,15 @@ task.spawn(function()
         if S.autoStomp then
             local now = tick()
             if now - S.lastStompAt >= S.stompDelay then
-                local _, targetRoot = getNearestKnockedTarget(S.stompRange)
-                if targetRoot and stompTarget(targetRoot) then
+                local targetChar, targetRoot = getNearestKnockedTarget(S.stompRange)
+                if targetRoot and stompTarget(targetChar, targetRoot) then
                     S.lastStompAt = now
+                elseif now - S.lastStompDebugAt > 2 then
+                    S.lastStompDebugAt = now
+                    if not targetRoot then
+                        S.lastStompStatus = "no knocked target in range"
+                    end
+                    print("Better Void auto stomp:", targetChar and "stomp prep failed" or "no knocked target in range")
                 end
             end
             task.wait(0.08)
