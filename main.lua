@@ -2,7 +2,9 @@ local Players = game:GetService("Players")
 local lp = Players.LocalPlayer
 
 if _G.BetterVoid and _G.BetterVoid.unload then
-    _G.BetterVoid.unload()
+    pcall(function()
+        _G.BetterVoid.unload()
+    end)
 end
 
 local Lib = loadstring(game:HttpGet("https://raw.githubusercontent.com/neaxusxgod-png/INS-ui/main/uilib.min.lua"))()
@@ -24,6 +26,11 @@ local S = {
 
 _G.BetterVoid = S
 
+local function getRoot()
+    local char = lp and lp.Character
+    return char and char:FindFirstChild("HumanoidRootPart")
+end
+
 local function notify(title, text, kind)
     if Lib and Lib.Notify then
         Lib:Notify(title, text, 2, kind or "info")
@@ -43,11 +50,6 @@ local function setEnabled(on)
     end
 
     notify("Better Void", S.enabled and "enabled" or "disabled", S.enabled and "success" or "warning")
-end
-
-local function getRoot()
-    local char = lp.Character
-    return char and char:FindFirstChild("HumanoidRootPart")
 end
 
 local win = Lib:CreateWindow({
@@ -168,7 +170,11 @@ function S.unload()
     S.running = false
 
     for _, c in ipairs(S.conns) do
-        c:Disconnect()
+        if c and c.Disconnect then
+            pcall(function()
+                c:Disconnect()
+            end)
+        end
     end
 
     if win then
@@ -243,9 +249,11 @@ task.spawn(function()
                     driftZ = math.cos(t * 2.5) * 8
                 end
 
-                root.CFrame = CFrame.new(S.anchorX + driftX, S.depth, S.anchorZ + driftZ)
-                root.AssemblyLinearVelocity = Vector3.new(0, S.velocity, 0)
-                root.CanCollide = false
+                pcall(function()
+                    root.CFrame = CFrame.new(S.anchorX + driftX, S.depth, S.anchorZ + driftZ)
+                    root.AssemblyLinearVelocity = Vector3.new(0, S.velocity, 0)
+                    root.CanCollide = false
+                end)
 
                 if burst then
                     task.wait(0.045)
