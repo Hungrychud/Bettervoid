@@ -1,99 +1,118 @@
 local Players = game:GetService("Players")
-local UIS = game:GetService("UserInputService")
 local lp = Players.LocalPlayer
-local mouse = lp:GetMouse()
 
-if _G.BetterVoidGUI and _G.BetterVoidGUI.unload then
-    _G.BetterVoidGUI.unload()
+if _G.BetterVoid and _G.BetterVoid.unload then
+    _G.BetterVoid.unload()
 end
+
+local Lib = loadstring(game:HttpGet("https://raw.githubusercontent.com/neaxusxgod-png/INS-ui/main/uilib.min.lua"))()
+Lib = Lib or INSUI or INSui
 
 local S = {
     enabled = false,
     running = true,
-    depthIndex = 1,
-    rateIndex = 1,
-    drawings = {},
+    depth = -25000,
+    rate = 0.25,
+    velocity = -2000,
     conns = {}
 }
 
-_G.BetterVoidGUI = S
+_G.BetterVoid = S
 
-local depths = { -25000, -50000, -100000 }
-local rates = { 0.25, 0.18, 0.12 }
-local KEY_B = 98
-local KEY_N = 110
-local KEY_V = 118
-local KEY_X = 120
-
-local function add(obj)
-    S.drawings[#S.drawings + 1] = obj
-    return obj
-end
-
-local function rect(x, y, w, h, color)
-    local d = add(Drawing.new("Square"))
-    d.Position = Vector2.new(x, y)
-    d.Size = Vector2.new(w, h)
-    d.Color = color
-    d.Filled = true
-    d.Transparency = 0.08
-    d.Visible = true
-    return d
-end
-
-local function label(x, y, size, value, color)
-    local d = add(Drawing.new("Text"))
-    d.Position = Vector2.new(x, y)
-    d.Size = size
-    d.Text = value
-    d.Color = color
-    d.Outline = true
-    d.Visible = true
-    return d
-end
-
-local bg = rect(20, 190, 270, 164, Color3.fromRGB(15, 16, 20))
-local accent = rect(20, 190, 270, 3, Color3.fromRGB(80, 170, 255))
-local title = label(34, 204, 17, "Better Void", Color3.fromRGB(255, 255, 255))
-local status = label(34, 230, 14, "", Color3.fromRGB(160, 220, 255))
-local detail = label(34, 251, 13, "", Color3.fromRGB(220, 220, 220))
-
-local btnToggle = rect(34, 281, 100, 30, Color3.fromRGB(120, 55, 55))
-local txtToggle = label(55, 288, 13, "TOGGLE", Color3.fromRGB(255, 255, 255))
-
-local btnDepth = rect(144, 281, 62, 30, Color3.fromRGB(60, 70, 115))
-local txtDepth = label(157, 288, 13, "DEPTH", Color3.fromRGB(255, 255, 255))
-
-local btnSpeed = rect(216, 281, 60, 30, Color3.fromRGB(95, 65, 115))
-local txtSpeed = label(228, 288, 13, "SPEED", Color3.fromRGB(255, 255, 255))
-
-local hotkeys = label(34, 327, 12, "V toggle | B depth | N speed | X unload", Color3.fromRGB(200, 200, 200))
-
-local function refresh()
-    status.Text = "Status: " .. (S.enabled and "ON" or "OFF")
-    detail.Text = "Depth: " .. tostring(depths[S.depthIndex]) .. " | Tick: " .. tostring(rates[S.rateIndex]) .. "s"
-    btnToggle.Color = S.enabled and Color3.fromRGB(45, 150, 90) or Color3.fromRGB(120, 55, 55)
-end
-
-local function cycleDepth()
-    S.depthIndex = S.depthIndex + 1
-    if S.depthIndex > #depths then
-        S.depthIndex = 1
+local function notify(title, text, kind)
+    if Lib and Lib.Notify then
+        Lib:Notify(title, text, 2, kind or "info")
     end
-    refresh()
 end
 
-local function cycleSpeed()
-    S.rateIndex = S.rateIndex + 1
-    if S.rateIndex > #rates then
-        S.rateIndex = 1
+local function setEnabled(on)
+    S.enabled = on and true or false
+    notify("Better Void", S.enabled and "enabled" or "disabled", S.enabled and "success" or "warning")
+end
+
+local function getRoot()
+    local char = lp.Character
+    return char and char:FindFirstChild("HumanoidRootPart")
+end
+
+local win = Lib:CreateWindow({
+    title = "Better Void",
+    subtitle = "INS UI",
+    size = Vector2.new(620, 430),
+    position = Vector2.new(48, 48),
+    menuKey = "p",
+    theme = { accent = Color3.fromRGB(80, 170, 255) },
+    accentA = Color3.fromRGB(80, 170, 255),
+    accentB = Color3.fromRGB(180, 120, 255),
+    font = "Proxima",
+    opacity = 0.95,
+    rounding = 1,
+    rowLines = true,
+    checkboxStyle = true,
+    keybindOverlay = true,
+    backgroundEffect = "Rain",
+    backgroundEffectColor = Color3.fromRGB(80, 170, 255),
+    configName = "bettervoid",
+    configFolder = "BetterVoid",
+    autoSave = true,
+    smartFps = true,
+    gameInput = false,
+    startOpen = true
+})
+
+if win.AddSettingsTab then
+    win:AddSettingsTab("cog")
+end
+
+local voidTab = win:Tab("Void", "shield")
+local controls = voidTab:Section("Controls", "Left", "stable void loop")
+
+local toggle = controls:Toggle("Better Void", false, function(on)
+    setEnabled(on)
+end)
+
+if toggle and toggle.AddKeybind then
+    toggle:AddKeybind("v", "Toggle")
+end
+
+controls:Slider("Depth", 25000, 1000, 10000, 100000, "", function(v)
+    S.depth = -math.floor(v)
+end)
+
+controls:Slider("Tick delay", 0.25, 0.01, 0.12, 0.5, "s", function(v)
+    S.rate = math.max(0.12, v)
+end)
+
+controls:Slider("Fall velocity", 2000, 100, 500, 5000, "", function(v)
+    S.velocity = -math.floor(v)
+end)
+
+controls:Button("Return to origin", function()
+    local root = getRoot()
+    if root then
+        root.CFrame = CFrame.new(0, 25, 0)
+        root.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
     end
-    refresh()
-end
+end)
 
-local function inside(x, y, bx, by, bw, bh)
-    return x >= bx and x <= bx + bw and y >= by and y <= by + bh
-end
+local info = voidTab:Section("Status", "Right", "live values")
+info:Label(function()
+    return "Status: " .. (S.enabled and "ON" or "OFF")
+end)
+info:Label(function()
+    return "Depth: " .. tostring(S.depth)
+end)
+info:Label(function()
+    return "Tick: " .. tostring(S.rate) .. "s"
+end)
+info:Label(function()
+    local root = getRoot()
+    return "Y position: " .. (root and tostring(math.floor(root.Position.Y)) or "none")
+end)
+info:Info("Press P to open/close the menu. V toggles Better Void. X unloads everything.")
+info:Button("Unload", function()
+    S.unload()
+end):SetRisk()
 
 function S.unload()
     S.enabled = false
@@ -103,53 +122,40 @@ function S.unload()
         c:Disconnect()
     end
 
-    for _, d in ipairs(S.drawings) do
-        d:Remove()
+    if win then
+        pcall(function()
+            if win.Destroy then
+                win:Destroy()
+            elseif win.Unload then
+                win:Unload()
+            end
+        end)
     end
 
-    _G.BetterVoidGUI = nil
+    pcall(function()
+        if Lib and Lib.Destroy then
+            Lib:Destroy()
+        end
+    end)
+
+    _G.BetterVoid = nil
 end
 
-refresh()
-
-S.conns[#S.conns + 1] = UIS.InputBegan:Connect(function(input)
-    local key = input.KeyCode
-
-    if key == KEY_V then
-        S.enabled = not S.enabled
-        refresh()
-    elseif key == KEY_B then
-        cycleDepth()
-    elseif key == KEY_N then
-        cycleSpeed()
-    elseif key == KEY_X then
-        S.unload()
-    end
-end)
-
 task.spawn(function()
-    local lastB = false
-    local lastN = false
     local lastV = false
     local lastX = false
 
     while S.running do
-        local b = iskeypressed(KEY_B)
-        local n = iskeypressed(KEY_N)
-        local v = iskeypressed(KEY_V)
-        local x = iskeypressed(KEY_X)
+        local v = iskeypressed(118)
+        local x = iskeypressed(120)
 
         if v and not lastV then
-            S.enabled = not S.enabled
-            refresh()
-        end
-
-        if b and not lastB then
-            cycleDepth()
-        end
-
-        if n and not lastN then
-            cycleSpeed()
+            setEnabled(not S.enabled)
+            if toggle and toggle.Set then
+                pcall(function()
+                    toggle:Set(S.enabled)
+                end)
+            end
         end
 
         if x and not lastX then
@@ -157,35 +163,8 @@ task.spawn(function()
             break
         end
 
-        lastB = b
-        lastN = n
         lastV = v
         lastX = x
-
-        task.wait(0.04)
-    end
-end)
-
-task.spawn(function()
-    local wasDown = false
-
-    while S.running do
-        local down = ismouse1pressed()
-
-        if down and not wasDown then
-            local x, y = mouse.X, mouse.Y
-
-            if inside(x, y, 34, 281, 100, 30) then
-                S.enabled = not S.enabled
-                refresh()
-            elseif inside(x, y, 144, 281, 62, 30) then
-                cycleDepth()
-            elseif inside(x, y, 216, 281, 60, 30) then
-                cycleSpeed()
-            end
-        end
-
-        wasDown = down
         task.wait(0.04)
     end
 end)
@@ -193,18 +172,20 @@ end)
 task.spawn(function()
     while S.running do
         if S.enabled then
-            local char = lp.Character
-            local root = char and char:FindFirstChild("HumanoidRootPart")
+            local root = getRoot()
 
             if root then
-                root.CFrame = CFrame.new(0, depths[S.depthIndex], 0)
-                root.AssemblyLinearVelocity = Vector3.new(0, -2000, 0)
+                root.CFrame = CFrame.new(0, S.depth, 0)
+                root.AssemblyLinearVelocity = Vector3.new(0, S.velocity, 0)
                 root.CanCollide = false
             end
 
-            task.wait(rates[S.rateIndex])
+            task.wait(S.rate)
         else
             task.wait(0.15)
         end
     end
 end)
+
+notify("Better Void", "loaded. Press P to toggle the menu.", "success")
+
