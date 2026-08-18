@@ -59,6 +59,7 @@ local S = {
     shootAssist = true,
     instantShoot = true,
     instantShootDelay = 0.01,
+    instantShootBurst = 6,
     lastInstantShotAt = 0,
     shootHoldTime = 0.65,
     stabilizeOnAim = true,
@@ -102,6 +103,7 @@ local CONFIG_KEYS = {
     "shootAssist",
     "instantShoot",
     "instantShootDelay",
+    "instantShootBurst",
     "shootHoldTime",
     "stabilizeOnAim",
     "autoStomp",
@@ -188,6 +190,7 @@ local function loadConfig(slot)
     S.roamSpeed = math.max(1, math.min(40, S.roamSpeed))
     S.returnHeight = math.max(0, math.min(50, S.returnHeight))
     S.instantShootDelay = math.max(0.01, math.min(0.2, S.instantShootDelay))
+    S.instantShootBurst = math.max(1, math.min(20, math.floor(S.instantShootBurst)))
     S.shootHoldTime = math.max(0.05, math.min(2, S.shootHoldTime))
     S.stompRange = math.max(10, math.min(1000, S.stompRange))
     S.stompHeight = math.max(0, math.min(8, S.stompHeight))
@@ -358,14 +361,21 @@ local function fireInstantShot(tool)
     end
 
     local ammo = tool:FindFirstChild("Ammo")
+    local maxAmmo = tool:FindFirstChild("MaxAmmo")
     local handle = tool:FindFirstChild("Handle")
     local range = tool:FindFirstChild("Range")
     local damage = tool:FindFirstChild("Damage")
     local remotes = ReplicatedStorage and ReplicatedStorage:FindFirstChild("GameRemotes")
     local mainRemote = remotes and remotes:FindFirstChild("MainGameEvent")
 
-    if not ammo or ammo.Value < 1 or not handle or not range or not damage or not mainRemote then
+    if not ammo or not handle or not range or not damage or not mainRemote then
         return false
+    end
+
+    if maxAmmo and ammo.Value < maxAmmo.Value then
+        ammo.Value = maxAmmo.Value
+    elseif ammo.Value < 1 then
+        ammo.Value = 1
     end
 
     local origin = getShotOrigin(tool, handle)
@@ -654,6 +664,11 @@ shootingControls:Slider("Shoot delay", S.instantShootDelay, 0.005, 0.01, 0.2, "s
     saveConfig()
 end)
 
+shootingControls:Slider("Shoot burst", S.instantShootBurst, 1, 1, 20, "", function(v)
+    S.instantShootBurst = math.max(1, math.floor(v))
+    saveConfig()
+end)
+
 shootingControls:Toggle("Stabilize on aim", S.stabilizeOnAim, function(on)
     S.stabilizeOnAim = on and true or false
     saveConfig()
@@ -824,6 +839,9 @@ info:Label(function()
     return "Shoot delay: " .. tostring(S.instantShootDelay) .. "s"
 end)
 info:Label(function()
+    return "Shoot burst: " .. tostring(S.instantShootBurst)
+end)
+info:Label(function()
     return "Stabilize on aim: " .. (S.stabilizeOnAim and "ON" or "OFF")
 end)
 info:Label(function()
@@ -917,7 +935,13 @@ task.spawn(function()
             local now = tick()
             if now - S.lastInstantShotAt >= S.instantShootDelay then
                 local tool = getEquippedShooter()
-                if tool and fireInstantShot(tool) then
+                local fired = false
+                if tool then
+                    for _ = 1, S.instantShootBurst do
+                        fired = fireInstantShot(tool) or fired
+                    end
+                end
+                if fired then
                     S.lastInstantShotAt = now
                 end
             end
