@@ -67,6 +67,8 @@ local S = {
     stompRange = 350,
     stompHeight = 1,
     stompDelay = 0.35,
+    stompRepeats = 6,
+    stompInterval = 0.08,
     lastStompAt = 0,
     selectedPlayer = nil,
     stickToTarget = false,
@@ -100,6 +102,8 @@ local CONFIG_KEYS = {
     "stompRange",
     "stompHeight",
     "stompDelay",
+    "stompRepeats",
+    "stompInterval",
     "stickToTarget",
     "stickHeight",
     "stickBehind"
@@ -183,6 +187,8 @@ local function loadConfig(slot)
     S.stompRange = math.max(10, math.min(1000, S.stompRange))
     S.stompHeight = math.max(0, math.min(8, S.stompHeight))
     S.stompDelay = math.max(0.1, math.min(2, S.stompDelay))
+    S.stompRepeats = math.max(1, math.min(20, math.floor(S.stompRepeats)))
+    S.stompInterval = math.max(0.03, math.min(0.5, S.stompInterval))
     S.stickHeight = math.max(0, math.min(15, S.stickHeight))
     S.stickBehind = math.max(-10, math.min(10, S.stickBehind))
 
@@ -398,21 +404,29 @@ local function stompTarget(targetRoot)
         return false
     end
 
-    local stompPos = targetRoot.Position + Vector3.new(0, S.stompHeight, 0)
-    S.shootAssistUntil = tick() + 0.55
-    S.shootLockX = stompPos.X
-    S.shootLockY = stompPos.Y
-    S.shootLockZ = stompPos.Z
+    S.shootAssistUntil = tick() + (S.stompRepeats * S.stompInterval) + 0.45
 
-    pcall(function()
-        root.CFrame = CFrame.new(stompPos)
-        root.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
-        root.CanCollide = true
-    end)
+    for _ = 1, S.stompRepeats do
+        root = getRoot()
+        if not root or not targetRoot then
+            break
+        end
 
-    task.wait(0.12)
-    mainRemote:FireServer("Stomp")
-    task.wait(0.08)
+        local stompPos = targetRoot.Position + Vector3.new(0, S.stompHeight, 0)
+        S.shootLockX = stompPos.X
+        S.shootLockY = stompPos.Y
+        S.shootLockZ = stompPos.Z
+
+        pcall(function()
+            root.CFrame = CFrame.new(stompPos)
+            root.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
+            root.CanCollide = true
+        end)
+
+        mainRemote:FireServer("Stomp")
+        task.wait(S.stompInterval)
+    end
+
     return true
 end
 
@@ -805,6 +819,16 @@ shootingControls:Slider("Stomp delay", S.stompDelay, 0.05, 0.1, 2, "s", function
     saveConfig()
 end)
 
+shootingControls:Slider("Stomp repeats", S.stompRepeats, 1, 1, 20, "", function(v)
+    S.stompRepeats = math.max(1, math.floor(v))
+    saveConfig()
+end)
+
+shootingControls:Slider("Repeat interval", S.stompInterval, 0.01, 0.03, 0.5, "s", function(v)
+    S.stompInterval = math.max(0.03, v)
+    saveConfig()
+end)
+
 controls:Divider("Presets")
 
 controls:Button("Above map", function()
@@ -934,6 +958,9 @@ info:Label(function()
 end)
 info:Label(function()
     return "Stomp height: " .. tostring(S.stompHeight)
+end)
+info:Label(function()
+    return "Stomp repeats: " .. tostring(S.stompRepeats)
 end)
 info:Label(function()
     local root = getRoot()
