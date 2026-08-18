@@ -186,7 +186,7 @@ if toggle and toggle.AddKeybind then
     toggle:AddKeybind("v", "Toggle")
 end
 
-controls:Slider("Depth", 650, 25, 100, 10000, "", function(v)
+controls:Slider("Void height", 650, 25, 100, 10000, "", function(v)
     S.depth = -math.floor(v)
 end)
 
@@ -267,7 +267,7 @@ info:Label(function()
     return "Status: " .. (S.enabled and "ON" or "OFF")
 end)
 info:Label(function()
-    return "Depth: " .. tostring(S.depth)
+    return "Void height: " .. tostring(S.depth)
 end)
 info:Label(function()
     return "Tick: " .. tostring(S.rate) .. "s"
