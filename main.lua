@@ -366,6 +366,10 @@ local win = Lib:CreateWindow({
     startOpen = true
 })
 
+if win.AddSettingsTab then
+    win:AddSettingsTab("cog")
+end
+
 local voidTab = win:Tab("Void", "shield")
 local shootingTab = win:Tab("Shooting", "crosshair")
 local settingsTab = win:Tab("Settings", "cog")
