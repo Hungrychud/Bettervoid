@@ -12,12 +12,13 @@ Files:
 - `Z` toggles Auto stomp by default; change it from the keybind control in the GUI.
 - `C` toggles Teleport stomp by default; change it from the keybind control in the GUI.
 - `X` unloads the script and removes the GUI.
-- Use the GUI sliders to change height, tick delay, velocity, roam, shooting stabilizer, no reload, and stomp settings.
+- Use the GUI sliders to change height, tick delay, velocity, roam, shooting stabilizer, no reload, aim corrector, and stomp settings.
 
 ## Notes
 
 - This is a client-side script. Server-authoritative systems, such as damage validation, may ignore client-only rapid-fire attempts.
 - `No reload` keeps local supported weapon ammo topped up and clears the local reload flag. Server-side ammo validation may still apply.
+- `Aim corrector` improves the client-side rapid-fire ray by selecting a visible target inside the Aim FOV cone.
 - `Visual rapid fire` is off by default because it can show extra local shots without server damage registration.
 - `Auto stomp` uses the existing `MainGameEvent` stomp action and depends on what the live server accepts.
 

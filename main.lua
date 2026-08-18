@@ -58,6 +58,8 @@ local S = {
     returnHeight = 3,
     shootAssist = true,
     noReload = true,
+    aimCorrector = true,
+    aimCorrectorFov = 8,
     instantShoot = false,
     instantShootDelay = 0.01,
     instantShootBurst = 6,
@@ -102,6 +104,8 @@ local CONFIG_KEYS = {
     "returnHeight",
     "shootAssist",
     "noReload",
+    "aimCorrector",
+    "aimCorrectorFov",
     "instantShoot",
     "instantShootDelay",
     "instantShootBurst",
@@ -190,6 +194,7 @@ local function loadConfig(slot)
     S.roamRadius = math.max(100, math.min(5000, S.roamRadius))
     S.roamSpeed = math.max(1, math.min(40, S.roamSpeed))
     S.returnHeight = math.max(0, math.min(50, S.returnHeight))
+    S.aimCorrectorFov = math.max(1, math.min(30, S.aimCorrectorFov))
     S.instantShootDelay = math.max(0.01, math.min(0.2, S.instantShootDelay))
     S.instantShootBurst = math.max(1, math.min(20, math.floor(S.instantShootBurst)))
     S.shootHoldTime = math.max(0.05, math.min(2, S.shootHoldTime))
@@ -368,14 +373,74 @@ local function getShotOrigin(tool, handle)
     return origin
 end
 
+local function getAimCorrectedPosition(origin, rangeValue)
+    if not S.aimCorrector then
+        return nil
+    end
+
+    local camera = workspace.CurrentCamera
+    if not camera then
+        return nil
+    end
+
+    local camPos = camera.CFrame.Position
+    local camLook = camera.CFrame.LookVector
+    local minDot = math.cos(math.rad(S.aimCorrectorFov or 8))
+    local bestDot = minDot
+    local bestPos
+
+    local params = RaycastParams.new()
+    params.FilterDescendantsInstances = { lp.Character }
+    params.FilterType = Enum.RaycastFilterType.Exclude
+    params.IgnoreWater = true
+
+    for _, plr in ipairs(Players:GetPlayers()) do
+        if plr.UserId ~= lp.UserId then
+            local char = plr.Character
+            local hum = char and char:FindFirstChild("Humanoid")
+            local head = char and char:FindFirstChild("Head")
+            local root = char and char:FindFirstChild("HumanoidRootPart")
+            local aimPart = head or root
+
+            if aimPart and (not hum or hum.Health > 0) then
+                local targetPos = aimPart.Position
+                local fromOrigin = targetPos - origin
+                local fromCamera = targetPos - camPos
+
+                if fromOrigin.Magnitude <= rangeValue and fromCamera.Magnitude > 0 then
+                    local dot = fromCamera.Unit:Dot(camLook)
+                    if dot > bestDot then
+                        local los = workspace:Raycast(origin, fromOrigin, params)
+                        if not los or (los.Instance and los.Instance:IsDescendantOf(char)) then
+                            bestDot = dot
+                            bestPos = targetPos
+                        end
+                    end
+                end
+            end
+        end
+    end
+
+    return bestPos
+end
+
 local function traceInstantShot(origin, rangeValue, spread)
     local camera = workspace.CurrentCamera
-    local direction = camera and camera.CFrame.LookVector or Vector3.new(0, 0, -1)
+    local correctedPos = getAimCorrectedPosition(origin, rangeValue)
+    local direction
+
+    if correctedPos then
+        direction = (correctedPos - origin).Unit
+    else
+        direction = camera and camera.CFrame.LookVector or Vector3.new(0, 0, -1)
+    end
+
     if spread and spread > 0 then
+        local spreadScale = correctedPos and (spread * 0.25) or spread
         direction = (direction + Vector3.new(
-            (math.random() - 0.5) * spread,
-            (math.random() - 0.5) * spread,
-            (math.random() - 0.5) * spread
+            (math.random() - 0.5) * spreadScale,
+            (math.random() - 0.5) * spreadScale,
+            (math.random() - 0.5) * spreadScale
         )).Unit
     end
 
@@ -696,6 +761,16 @@ shootingControls:Toggle("No reload", S.noReload, function(on)
     saveConfig()
 end)
 
+shootingControls:Toggle("Aim corrector", S.aimCorrector, function(on)
+    S.aimCorrector = on and true or false
+    saveConfig()
+end)
+
+shootingControls:Slider("Aim FOV", S.aimCorrectorFov, 1, 1, 30, " deg", function(v)
+    S.aimCorrectorFov = math.max(1, v)
+    saveConfig()
+end)
+
 shootingControls:Toggle("Visual rapid fire", S.instantShoot, function(on)
     S.instantShoot = on and true or false
     saveConfig()
@@ -884,6 +959,12 @@ info:Label(function()
 end)
 info:Label(function()
     return "No reload: " .. (S.noReload and "ON" or "OFF")
+end)
+info:Label(function()
+    return "Aim corrector: " .. (S.aimCorrector and "ON" or "OFF")
+end)
+info:Label(function()
+    return "Aim FOV: " .. tostring(S.aimCorrectorFov) .. " deg"
 end)
 info:Label(function()
     return "Visual rapid fire: " .. (S.instantShoot and "ON" or "OFF")
