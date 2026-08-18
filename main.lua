@@ -206,17 +206,61 @@ end
 
 local function getEquippedGun()
     local char = lp and lp.Character
-    if not char then
-        return nil
-    end
-
-    for _, item in ipairs(char:GetChildren()) do
-        if item.ClassName == "Tool" and item:FindFirstChild("Ammo") and item:FindFirstChild("ShootingCooldown") then
-            return item
+    if char then
+        for _, item in ipairs(char:GetChildren()) do
+            if item.ClassName == "Tool" and item:FindFirstChild("Ammo") and item:FindFirstChild("ShootingCooldown") then
+                return item
+            end
         end
     end
 
-    return nil
+    local backpack = lp and lp:FindFirstChild("Backpack")
+    local bestTool
+    local bestAmmo = -1
+
+    for _, item in ipairs(backpack and backpack:GetChildren() or {}) do
+        if item.ClassName == "Tool" and item:FindFirstChild("Ammo") and item:FindFirstChild("ShootingCooldown") then
+            local ammo = item:FindFirstChild("Ammo")
+            local ammoValue = ammo and ammo.Value or 0
+            if ammoValue > bestAmmo then
+                bestTool = item
+                bestAmmo = ammoValue
+            end
+        end
+    end
+
+    return bestTool
+end
+
+local function getShotDirection(origin, spread)
+    local camera = workspace.CurrentCamera
+    local direction = camera and camera.CFrame.LookVector or Vector3.new(0, 0, -1)
+
+    if spread and spread > 0 and camera then
+        direction = direction
+            + camera.CFrame.RightVector * ((math.random() - 0.5) * spread)
+            + camera.CFrame.UpVector * ((math.random() - 0.5) * spread)
+    end
+
+    return direction.Unit
+end
+
+local function castShot(origin, rangeValue, spread)
+    local direction = getShotDirection(origin, spread)
+    local params = RaycastParams.new()
+    params.FilterType = Enum.RaycastFilterType.Exclude
+    params.IgnoreWater = true
+
+    if lp and lp.Character then
+        params.FilterDescendantsInstances = { lp.Character }
+    end
+
+    local result = workspace:Raycast(origin, direction * rangeValue, params)
+    if result then
+        return result.Instance, result.Position, result.Normal, origin + direction * rangeValue
+    end
+
+    return nil, origin + direction * rangeValue, nil, origin + direction * rangeValue
 end
 
 local function startMagDump()
@@ -229,10 +273,6 @@ local function startMagDump()
     task.spawn(function()
         local ReplicatedStorage = game:GetService("ReplicatedStorage")
         local mainRemote = ReplicatedStorage and ReplicatedStorage:FindFirstChild("GameRemotes") and ReplicatedStorage.GameRemotes:FindFirstChild("MainGameEvent")
-        local gunHandler
-        pcall(function()
-            gunHandler = require(ReplicatedStorage.Modules.GunHandler)
-        end)
 
         local tool = getEquippedGun()
         local ammo = tool and tool:FindFirstChild("Ammo")
@@ -248,7 +288,7 @@ local function startMagDump()
             end)
         end
 
-        if not tool or not ammo or not handle or not range or not damage or not mainRemote or not gunHandler then
+        if not tool or not ammo or not handle or not range or not damage or not mainRemote then
             if cooldown and oldCooldown then
                 pcall(function()
                     cooldown.Value = oldCooldown
@@ -284,18 +324,7 @@ local function startMagDump()
             if tool.Name == "[Double-Barrel SG]" or tool.Name == "[TacticalShotgun]" then
                 local pellets = {}
                 for _ = 1, 5 do
-                    local spreadX = (math.random() - 0.5) * 0.1
-                    local spreadY = (math.random() - 0.5) * 0.1
-                    local spreadZ = (math.random() - 0.5) * 0.1
-                    local aim = origin + (gunHandler.GetAim(origin) + Vector3.new(spreadX, spreadY, spreadZ)) * range.Value
-                    local hit, pos, normal = gunHandler.Shoot({
-                        Shooter = lp.Character,
-                        Handle = handle,
-                        ForcedOrigin = origin,
-                        AimPosition = aim,
-                        BeamColor = Color3.new(1, 0.94902, 0.352941),
-                        Range = range.Value
-                    })
+                    local hit, pos, normal, aim = castShot(origin, range.Value, 0.1)
                     pellets[#pellets + 1] = {
                         AimPosition = aim,
                         Result1 = hit,
@@ -306,16 +335,7 @@ local function startMagDump()
 
                 mainRemote:FireServer("ShootGun", handle, origin, pellets, nil, nil, nil, range.Value, damage.Value)
             else
-                local aim = origin + gunHandler.GetAim(origin) * 200
-                local hit, pos, normal = gunHandler.Shoot({
-                    Shooter = lp.Character,
-                    Handle = handle,
-                    ForcedOrigin = origin,
-                    AimPosition = aim,
-                    BeamColor = Color3.new(1, 0.94902, 0.352941),
-                    Range = range.Value
-                })
-
+                local hit, pos, normal = castShot(origin, range.Value, 0)
                 mainRemote:FireServer("ShootGun", handle, origin, nil, hit, pos, normal, range.Value, damage.Value)
             end
 
