@@ -57,10 +57,11 @@ local S = {
     roamSpeed = 8,
     returnHeight = 3,
     shootAssist = true,
-    shootAssistHeight = 3,
+    shootHoldTime = 0.22,
     shootAssistUntil = 0,
-    magDump = false,
-    magDumping = false,
+    shootLockX = nil,
+    shootLockY = nil,
+    shootLockZ = nil,
     anchorX = nil,
     anchorY = nil,
     anchorZ = nil,
@@ -84,8 +85,7 @@ local CONFIG_KEYS = {
     "roamSpeed",
     "returnHeight",
     "shootAssist",
-    "shootAssistHeight",
-    "magDump"
+    "shootHoldTime"
 }
 
 local function ensureConfigFolder()
@@ -162,7 +162,7 @@ local function loadConfig(slot)
     S.roamRadius = math.max(100, math.min(5000, S.roamRadius))
     S.roamSpeed = math.max(1, math.min(40, S.roamSpeed))
     S.returnHeight = math.max(0, math.min(50, S.returnHeight))
-    S.shootAssistHeight = math.max(0, math.min(50, S.shootAssistHeight))
+    S.shootHoldTime = math.max(0.05, math.min(1, S.shootHoldTime))
 
     return true
 end
@@ -193,151 +193,11 @@ _G.BetterVoid = S
 
 local toggle
 local shootAssistToggle
-local magDumpToggle
 local notify
 
 local function getRoot()
     local char = lp and lp.Character
     return char and char:FindFirstChild("HumanoidRootPart")
-end
-
-local function getEquippedGun()
-    local char = lp and lp.Character
-    if char then
-        for _, item in ipairs(char:GetChildren()) do
-            if item.ClassName == "Tool" and item:FindFirstChild("Ammo") and item:FindFirstChild("ShootingCooldown") then
-                return item
-            end
-        end
-    end
-
-    local backpack = lp and lp:FindFirstChild("Backpack")
-    local bestTool
-    local bestAmmo = -1
-
-    for _, item in ipairs(backpack and backpack:GetChildren() or {}) do
-        if item.ClassName == "Tool" and item:FindFirstChild("Ammo") and item:FindFirstChild("ShootingCooldown") then
-            local ammo = item:FindFirstChild("Ammo")
-            local ammoValue = ammo and ammo.Value or 0
-            if ammoValue > bestAmmo then
-                bestTool = item
-                bestAmmo = ammoValue
-            end
-        end
-    end
-
-    return bestTool
-end
-
-local function getShotDirection(origin, spread)
-    local camera = workspace.CurrentCamera
-    local direction = camera and camera.CFrame.LookVector or Vector3.new(0, 0, -1)
-
-    if spread and spread > 0 and camera then
-        direction = direction
-            + camera.CFrame.RightVector * ((math.random() - 0.5) * spread)
-            + camera.CFrame.UpVector * ((math.random() - 0.5) * spread)
-    end
-
-    return direction.Unit
-end
-
-local function castShot(origin, rangeValue, spread)
-    local direction = getShotDirection(origin, spread)
-    local params = RaycastParams.new()
-    params.FilterType = Enum.RaycastFilterType.Exclude
-    params.IgnoreWater = true
-
-    if lp and lp.Character then
-        params.FilterDescendantsInstances = { lp.Character }
-    end
-
-    local result = workspace:Raycast(origin, direction * rangeValue, params)
-    if result then
-        return result.Instance, result.Position, result.Normal, origin + direction * rangeValue
-    end
-
-    return nil, origin + direction * rangeValue, nil, origin + direction * rangeValue
-end
-
-local function startMagDump()
-    if S.magDumping then
-        return
-    end
-
-    S.magDumping = true
-
-    task.spawn(function()
-        local ReplicatedStorage = game:GetService("ReplicatedStorage")
-        local mainRemote = ReplicatedStorage and ReplicatedStorage:FindFirstChild("GameRemotes") and ReplicatedStorage.GameRemotes:FindFirstChild("MainGameEvent")
-
-        local tool = getEquippedGun()
-        local ammo = tool and tool:FindFirstChild("Ammo")
-        local handle = tool and tool:FindFirstChild("Handle")
-        local range = tool and tool:FindFirstChild("Range")
-        local damage = tool and tool:FindFirstChild("Damage")
-        local cooldown = tool and tool:FindFirstChild("ShootingCooldown")
-        local oldCooldown = cooldown and cooldown.Value
-
-        if cooldown then
-            pcall(function()
-                cooldown.Value = 0
-            end)
-        end
-
-        if not tool or not ammo or not handle or not range or not damage or not mainRemote then
-            if cooldown and oldCooldown then
-                pcall(function()
-                    cooldown.Value = oldCooldown
-                end)
-            end
-            notify("Mag dump", "gun data missing", "error")
-            S.magDumping = false
-            return
-        end
-
-        local shotCount = math.max(1, math.floor(ammo.Value))
-        local offset = CFrame.new(-1, 0.4, 0)
-        if tool.Name == "[Double-Barrel SG]" or tool.Name == "[TacticalShotgun]" then
-            offset = CFrame.new(0, 0.35, -2.2)
-        end
-
-        if S.shootAssist then
-            S.shootAssistUntil = tick() + 0.25
-            task.wait(0.03)
-        end
-
-        local origin = (handle.CFrame * offset).Position
-        local muzzle = tool:FindFirstChild("Default") and tool.Default:FindFirstChild("Mesh") and tool.Default.Mesh:FindFirstChild("Muzzle")
-        if muzzle then
-            origin = muzzle.WorldPosition
-        end
-
-        local isShotgun = tool.Name == "[Double-Barrel SG]" or tool.Name == "[TacticalShotgun]"
-        local packedShots = {}
-        local totalShots = isShotgun and shotCount * 5 or shotCount
-        local spread = isShotgun and 0.1 or 0.015
-
-        for i = 1, totalShots do
-            local hit, pos, normal, aim = castShot(origin, range.Value, spread)
-            packedShots[#packedShots + 1] = {
-                AimPosition = aim,
-                Result1 = hit,
-                Result2 = pos,
-                Result3 = normal
-            }
-        end
-
-        mainRemote:FireServer("ShootGun", handle, origin, packedShots, nil, nil, nil, range.Value, damage.Value)
-
-        if cooldown and oldCooldown then
-            pcall(function()
-                cooldown.Value = oldCooldown
-            end)
-        end
-
-        S.magDumping = false
-    end)
 end
 
 notify = function(title, text, kind)
@@ -375,6 +235,9 @@ local function setEnabled(on)
         S.anchorX = nil
         S.anchorY = nil
         S.anchorZ = nil
+        S.shootLockX = nil
+        S.shootLockY = nil
+        S.shootLockZ = nil
         S.snapBurstUntil = 0
         S.snapWindowUntil = 0
         S.snapCount = 0
@@ -389,6 +252,9 @@ local function stopVoid(reason)
     S.anchorX = nil
     S.anchorY = nil
     S.anchorZ = nil
+    S.shootLockX = nil
+    S.shootLockY = nil
+    S.shootLockZ = nil
     S.snapBurstUntil = 0
     S.snapWindowUntil = 0
     S.snapCount = 0
@@ -497,13 +363,8 @@ shootAssistToggle = shootingControls:Toggle("Shoot assist", S.shootAssist, funct
     saveConfig()
 end)
 
-shootingControls:Slider("Shoot height", S.shootAssistHeight, 1, 0, 50, " studs", function(v)
-    S.shootAssistHeight = math.floor(v)
-    saveConfig()
-end)
-
-magDumpToggle = shootingControls:Toggle("Mag dump", S.magDump, function(on)
-    S.magDump = on and true or false
+shootingControls:Slider("Hold time", S.shootHoldTime, 0.01, 0.05, 1, "s", function(v)
+    S.shootHoldTime = math.max(0.05, v)
     saveConfig()
 end)
 
@@ -537,25 +398,6 @@ controls:Button("Very high", function()
     S.roamSpeed = 15
     saveConfig()
     notify("Preset", "very high selected", "warning")
-end)
-
-shootingControls:Button("Dump now", function()
-    if not S.enabled then
-        notify("Mag dump", "turn Better Void on first", "warning")
-        return
-    end
-
-    if not S.magDump then
-        S.magDump = true
-        if magDumpToggle and magDumpToggle.Set then
-            pcall(function()
-                magDumpToggle:Set(true)
-            end)
-        end
-        saveConfig()
-    end
-
-    startMagDump()
 end)
 
 controls:Button("Return to origin", function()
@@ -645,10 +487,7 @@ info:Label(function()
     return "Shoot assist: " .. (S.shootAssist and "ON" or "OFF")
 end)
 info:Label(function()
-    return "Shoot height: " .. tostring(S.shootAssistHeight)
-end)
-info:Label(function()
-    return "Mag dump: " .. (S.magDump and "ON" or "OFF")
+    return "Hold time: " .. tostring(S.shootHoldTime) .. "s"
 end)
 info:Label(function()
     local root = getRoot()
@@ -714,10 +553,14 @@ task.spawn(function()
             break
         end
 
-        if S.enabled and S.magDump and mouse1 and not lastMouse1 then
-            startMagDump()
-        elseif S.enabled and S.shootAssist and mouse1 then
-            S.shootAssistUntil = tick() + 0.16
+        if S.enabled and S.shootAssist and mouse1 then
+            local root = getRoot()
+            if root and not lastMouse1 then
+                S.shootLockX = root.Position.X
+                S.shootLockY = root.Position.Y
+                S.shootLockZ = root.Position.Z
+            end
+            S.shootAssistUntil = tick() + S.shootHoldTime
             if not lastMouse1 then
                 S.snapBurstUntil = tick() + 0.25
             end
@@ -773,10 +616,18 @@ task.spawn(function()
 
                 pcall(function()
                     if shooting then
-                        root.CFrame = CFrame.new(S.anchorX, S.anchorY + S.shootAssistHeight, S.anchorZ)
+                        if not S.shootLockX or not S.shootLockY or not S.shootLockZ then
+                            S.shootLockX = root.Position.X
+                            S.shootLockY = root.Position.Y
+                            S.shootLockZ = root.Position.Z
+                        end
+                        root.CFrame = CFrame.new(S.shootLockX, S.shootLockY, S.shootLockZ)
                         root.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
                         root.CanCollide = true
                     else
+                        S.shootLockX = nil
+                        S.shootLockY = nil
+                        S.shootLockZ = nil
                         root.CFrame = CFrame.new(S.anchorX + offsetX, S.anchorY + S.height, S.anchorZ + offsetZ)
                         root.AssemblyLinearVelocity = Vector3.new(0, S.velocity, 0)
                         root.CanCollide = false
@@ -798,6 +649,9 @@ task.spawn(function()
             S.anchorX = nil
             S.anchorY = nil
             S.anchorZ = nil
+            S.shootLockX = nil
+            S.shootLockY = nil
+            S.shootLockZ = nil
             task.wait(0.15)
         end
     end
