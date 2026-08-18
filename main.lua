@@ -60,7 +60,7 @@ local S = {
     shootAssistHeight = 3,
     shootAssistUntil = 0,
     magDump = false,
-    magDumpDelay = 0.035,
+    magDumpDelay = 0.001,
     magDumping = false,
     anchorX = nil,
     anchorY = nil,
@@ -242,7 +242,7 @@ local function startMagDump()
 
         if cooldown then
             pcall(function()
-                cooldown.Value = math.min(0.01, oldCooldown or 0.01)
+                cooldown.Value = 0
             end)
         end
 
@@ -268,7 +268,7 @@ local function startMagDump()
                 break
             end
 
-            task.wait(math.max(0.01, S.magDumpDelay))
+            task.wait(math.max(0.001, S.magDumpDelay))
         end
 
         if cooldown and oldCooldown then
@@ -442,8 +442,8 @@ magDumpToggle = controls:Toggle("Mag dump", S.magDump, function(on)
     saveConfig()
 end)
 
-magDumpDelaySlider = controls:Slider("Dump delay", S.magDumpDelay, 0.005, 0.01, 0.2, "s", function(v)
-    S.magDumpDelay = math.max(0.01, v)
+magDumpDelaySlider = controls:Slider("Dump delay", S.magDumpDelay, 0.001, 0.001, 0.2, "s", function(v)
+    S.magDumpDelay = math.max(0.001, v)
     saveConfig()
 end)
 
@@ -477,6 +477,25 @@ controls:Button("Very high", function()
     S.roamSpeed = 15
     saveConfig()
     notify("Preset", "very high selected", "warning")
+end)
+
+controls:Button("Dump now", function()
+    if not S.enabled then
+        notify("Mag dump", "turn Better Void on first", "warning")
+        return
+    end
+
+    if not S.magDump then
+        S.magDump = true
+        if magDumpToggle and magDumpToggle.Set then
+            pcall(function()
+                magDumpToggle:Set(true)
+            end)
+        end
+        saveConfig()
+    end
+
+    startMagDump()
 end)
 
 controls:Button("Return to origin", function()
