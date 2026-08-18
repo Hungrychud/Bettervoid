@@ -489,7 +489,7 @@ shootingControls:Toggle("Auto stomp", S.autoStomp, function(on)
     saveConfig()
 end)
 
-shootingControls:Slider("Stomp range", S.stompRange, 5, 10, 100000, " studs", function(v)
+shootingControls:Slider("Stomp range", S.stompRange, 5, 10, 10000, " studs", function(v)
     S.stompRange = math.floor(v)
     saveConfig()
 end)
