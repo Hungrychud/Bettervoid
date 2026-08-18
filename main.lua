@@ -949,7 +949,7 @@ controls:Slider("Roam radius", S.roamRadius, 50, 100, 1000, "", function(v)
     saveConfig()
 end)
 
-controls:Slider("Roam speed", S.roamSpeed, 1, 1, 50000, "", function(v)
+controls:Slider("Roam speed", S.roamSpeed, 1, 1, 100000, "", function(v)
     S.roamSpeed = math.floor(v)
     saveConfig()
 end)
