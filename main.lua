@@ -11,9 +11,14 @@ Lib = Lib or INSUI or INSui
 local S = {
     enabled = false,
     running = true,
-    depth = -25000,
-    rate = 0.25,
-    velocity = -2000,
+    depth = -650,
+    rate = 0.18,
+    velocity = -1200,
+    antiSnap = true,
+    drift = true,
+    anchorX = nil,
+    anchorZ = nil,
+    snapBurstUntil = 0,
     conns = {}
 }
 
@@ -27,6 +32,16 @@ end
 
 local function setEnabled(on)
     S.enabled = on and true or false
+
+    if S.enabled then
+        local root = getRoot()
+        if root then
+            S.anchorX = root.Position.X
+            S.anchorZ = root.Position.Z
+        end
+        S.snapBurstUntil = tick() + 1.25
+    end
+
     notify("Better Void", S.enabled and "enabled" or "disabled", S.enabled and "success" or "warning")
 end
 
@@ -75,16 +90,47 @@ if toggle and toggle.AddKeybind then
     toggle:AddKeybind("v", "Toggle")
 end
 
-controls:Slider("Depth", 25000, 1000, 10000, 100000, "", function(v)
+controls:Slider("Depth", 650, 25, 100, 10000, "", function(v)
     S.depth = -math.floor(v)
 end)
 
-controls:Slider("Tick delay", 0.25, 0.01, 0.12, 0.5, "s", function(v)
+controls:Slider("Tick delay", 0.18, 0.01, 0.10, 0.5, "s", function(v)
     S.rate = math.max(0.12, v)
 end)
 
-controls:Slider("Fall velocity", 2000, 100, 500, 5000, "", function(v)
+controls:Slider("Fall velocity", 1200, 100, 500, 5000, "", function(v)
     S.velocity = -math.floor(v)
+end)
+
+controls:Toggle("Anti snapback", true, function(on)
+    S.antiSnap = on and true or false
+end)
+
+controls:Toggle("Small drift", true, function(on)
+    S.drift = on and true or false
+end)
+
+controls:Divider("Presets")
+
+controls:Button("Under map", function()
+    S.depth = -650
+    S.rate = 0.18
+    S.velocity = -1200
+    notify("Preset", "under map selected", "success")
+end)
+
+controls:Button("Low void", function()
+    S.depth = -2500
+    S.rate = 0.16
+    S.velocity = -1800
+    notify("Preset", "low void selected", "info")
+end)
+
+controls:Button("Deep void", function()
+    S.depth = -10000
+    S.rate = 0.14
+    S.velocity = -2500
+    notify("Preset", "deep void selected", "warning")
 end)
 
 controls:Button("Return to origin", function()
@@ -104,6 +150,9 @@ info:Label(function()
 end)
 info:Label(function()
     return "Tick: " .. tostring(S.rate) .. "s"
+end)
+info:Label(function()
+    return "Anti snap: " .. (S.antiSnap and "ON" or "OFF")
 end)
 info:Label(function()
     local root = getRoot()
@@ -175,17 +224,43 @@ task.spawn(function()
             local root = getRoot()
 
             if root then
-                root.CFrame = CFrame.new(0, S.depth, 0)
+                if not S.anchorX or not S.anchorZ then
+                    S.anchorX = root.Position.X
+                    S.anchorZ = root.Position.Z
+                end
+
+                if S.antiSnap and root.Position.Y > -50 then
+                    S.snapBurstUntil = tick() + 0.8
+                end
+
+                local t = tick()
+                local burst = S.antiSnap and t < S.snapBurstUntil
+                local driftX = 0
+                local driftZ = 0
+
+                if S.drift then
+                    driftX = math.sin(t * 2.5) * 8
+                    driftZ = math.cos(t * 2.5) * 8
+                end
+
+                root.CFrame = CFrame.new(S.anchorX + driftX, S.depth, S.anchorZ + driftZ)
                 root.AssemblyLinearVelocity = Vector3.new(0, S.velocity, 0)
                 root.CanCollide = false
-            end
 
-            task.wait(S.rate)
+                if burst then
+                    task.wait(0.045)
+                else
+                    task.wait(S.rate)
+                end
+            else
+                task.wait(0.15)
+            end
         else
+            S.anchorX = nil
+            S.anchorZ = nil
             task.wait(0.15)
         end
     end
 end)
 
 notify("Better Void", "loaded. Press P to toggle the menu.", "success")
-
