@@ -58,11 +58,11 @@ local S = {
     returnHeight = 3,
     shootAssist = true,
     shootHoldTime = 0.22,
+    stabilizeOnAim = true,
     shootAssistUntil = 0,
     shootLockX = nil,
     shootLockY = nil,
     shootLockZ = nil,
-    targetHoldUntil = 0,
     autoStomp = false,
     stompRange = 350,
     stompHeight = 1,
@@ -70,10 +70,6 @@ local S = {
     stompRepeats = 6,
     stompInterval = 0.08,
     lastStompAt = 0,
-    selectedPlayer = nil,
-    stickToTarget = false,
-    stickHeight = 2,
-    stickBehind = 0,
     anchorX = nil,
     anchorY = nil,
     anchorZ = nil,
@@ -98,15 +94,13 @@ local CONFIG_KEYS = {
     "returnHeight",
     "shootAssist",
     "shootHoldTime",
+    "stabilizeOnAim",
     "autoStomp",
     "stompRange",
     "stompHeight",
     "stompDelay",
     "stompRepeats",
-    "stompInterval",
-    "stickToTarget",
-    "stickHeight",
-    "stickBehind"
+    "stompInterval"
 }
 
 local function ensureConfigFolder()
@@ -189,8 +183,6 @@ local function loadConfig(slot)
     S.stompDelay = math.max(0.1, math.min(2, S.stompDelay))
     S.stompRepeats = math.max(1, math.min(20, math.floor(S.stompRepeats)))
     S.stompInterval = math.max(0.03, math.min(0.5, S.stompInterval))
-    S.stickHeight = math.max(0, math.min(15, S.stickHeight))
-    S.stickBehind = math.max(-10, math.min(10, S.stickBehind))
 
     return true
 end
@@ -230,123 +222,6 @@ end
 
 local function getCharacterRoot(char)
     return char and (char:FindFirstChild("HumanoidRootPart") or char:FindFirstChild("UpperTorso") or char:FindFirstChild("Torso"))
-end
-
-local function getSelectedPlayer()
-    if not S.selectedPlayer then
-        return nil
-    end
-
-    for _, plr in ipairs(Players:GetPlayers()) do
-        if plr.Name == S.selectedPlayer then
-            return plr
-        end
-    end
-
-    return nil
-end
-
-local function getCharacterByName(name)
-    if not name then
-        return nil
-    end
-
-    local playersFolder = workspace and workspace:FindFirstChild("Players")
-    if playersFolder then
-        return playersFolder:FindFirstChild(name)
-    end
-
-    return workspace and workspace:FindFirstChild(name)
-end
-
-local function getSelectedTargetRoot()
-    local plr = getSelectedPlayer()
-    local char = (plr and plr.Character) or getCharacterByName(S.selectedPlayer)
-    return getCharacterRoot(char), plr
-end
-
-local function getNearestPlayer()
-    local localRoot = getRoot()
-    if not localRoot then
-        return nil
-    end
-
-    local bestPlayer
-    local bestDist = math.huge
-
-    for _, plr in ipairs(Players:GetPlayers()) do
-        if plr.UserId ~= lp.UserId then
-            local root = getCharacterRoot(plr.Character or getCharacterByName(plr.Name))
-            if root then
-                local dist = (root.Position - localRoot.Position).Magnitude
-                if dist < bestDist then
-                    bestPlayer = plr
-                    bestDist = dist
-                end
-            end
-        end
-    end
-
-    return bestPlayer, bestDist
-end
-
-local function teleportToSelectedTarget()
-    local root = getRoot()
-    local targetRoot, targetPlayer = getSelectedTargetRoot()
-
-    if not S.selectedPlayer then
-        return false, "no selected player"
-    end
-
-    if not root then
-        return false, "your body is missing"
-    end
-
-    if not targetPlayer and not getCharacterByName(S.selectedPlayer) then
-        return false, "target left"
-    end
-
-    if not targetRoot then
-        return false, "target body missing"
-    end
-
-    local targetCf = targetRoot.CFrame
-    local pos = targetRoot.Position + Vector3.new(0, S.stickHeight, 0) - targetCf.LookVector * S.stickBehind
-    S.targetHoldUntil = tick() + 1.25
-    S.shootLockX = pos.X
-    S.shootLockY = pos.Y
-    S.shootLockZ = pos.Z
-
-    pcall(function()
-        root.CFrame = CFrame.new(pos, targetRoot.Position)
-        root.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
-        root.CanCollide = false
-    end)
-
-    task.spawn(function()
-        local untilTime = tick() + 0.9
-        while S.running and tick() < untilTime do
-            local currentRoot = getRoot()
-            local liveTargetRoot = getSelectedTargetRoot()
-
-            if not currentRoot or not liveTargetRoot then
-                break
-            end
-
-            local liveCf = liveTargetRoot.CFrame
-            local livePos = liveTargetRoot.Position + Vector3.new(0, S.stickHeight, 0) - liveCf.LookVector * S.stickBehind
-
-            pcall(function()
-                currentRoot.CFrame = CFrame.new(livePos, liveTargetRoot.Position)
-                currentRoot.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
-                currentRoot.CanCollide = false
-            end)
-
-            task.wait(0.04)
-        end
-    end)
-
-    return true, targetPlayer
 end
 
 local function isKnocked(char)
@@ -536,210 +411,9 @@ end
 
 local voidTab = win:Tab("Void", "shield")
 local shootingTab = win:Tab("Shooting", "crosshair")
-local playersTab = win:Tab("Players", "users")
 local settingsTab = win:Tab("Settings", "cog")
 local controls = voidTab:Section("Controls", "Left", "stable void loop")
 local shootingControls = shootingTab:Section("Controls", "Left", "shooting while roaming")
-local playerListSection = playersTab:Section("Player table", "Left", "live players")
-local playerInfoSection = playersTab:Section("Options", "Right", "target settings")
-
-local function getPlayersSorted()
-    local list = {}
-
-    for _, plr in ipairs(Players:GetPlayers()) do
-        list[#list + 1] = plr
-    end
-
-    table.sort(list, function(a, b)
-        return a.Name < b.Name
-    end)
-
-    return list
-end
-
-playerListSection:Label(function()
-    return "Players in server: " .. tostring(#Players:GetPlayers())
-end)
-
-local function addPlayerActions(plr)
-    local label = plr.Name
-    if plr.UserId == lp.UserId then
-        label = label .. " (you)"
-    end
-
-    playerListSection:Divider(label)
-
-    playerListSection:Label(function()
-        local char = plr.Character
-        local root = getCharacterRoot(char)
-        local localRoot = getRoot()
-        local dist = root and localRoot and math.floor((root.Position - localRoot.Position).Magnitude) or "?"
-        local ko = isKnocked(char) and " KO" or ""
-        return label .. " [" .. tostring(dist) .. "m]" .. ko
-    end)
-
-    playerListSection:Button(plr.Name, function()
-        if plr.Parent then
-            S.selectedPlayer = plr.Name
-            notify("Target", "selected " .. plr.Name, "success")
-        else
-            notify("Target", plr.Name .. " left", "warning")
-        end
-    end)
-
-    playerListSection:Button("Teleport " .. plr.Name, function()
-        if plr.Parent then
-            S.selectedPlayer = plr.Name
-            local ok, err = teleportToSelectedTarget()
-            if ok then
-                notify("Target", "teleported to " .. plr.Name, "success")
-            else
-                notify("Target", tostring(err), "warning")
-            end
-        else
-            notify("Target", plr.Name .. " left", "warning")
-        end
-    end)
-
-    playerListSection:Button("Stick " .. plr.Name, function()
-        if plr.Parent then
-            S.selectedPlayer = plr.Name
-            S.stickToTarget = true
-            local ok, err = teleportToSelectedTarget()
-            if ok then
-                notify("Target", "sticking to " .. plr.Name, "success")
-            else
-                S.stickToTarget = false
-                notify("Target", tostring(err), "warning")
-            end
-        else
-            notify("Target", plr.Name .. " left", "warning")
-        end
-    end)
-end
-
-for _, plr in ipairs(getPlayersSorted()) do
-    addPlayerActions(plr)
-end
-
-playerListSection:Button("Refresh players", function()
-    notify("Players", "reload script to rebuild player buttons", "info")
-end)
-
-playerInfoSection:Label(function()
-    return "Selected: " .. tostring(S.selectedPlayer or "none")
-end)
-playerInfoSection:Label(function()
-    return "Stick: " .. (S.stickToTarget and "ON" or "OFF")
-end)
-
-playerInfoSection:Button("Teleport nearest", function()
-    local plr = getNearestPlayer()
-    if not plr then
-        notify("Target", "no nearby player found", "warning")
-        return
-    end
-
-    S.selectedPlayer = plr.Name
-    local root = getRoot()
-    local before = root and root.Position
-    local ok, err = teleportToSelectedTarget()
-    if ok then
-        print("Better Void teleport:", plr.Name, before, getRoot() and getRoot().Position)
-        notify("Target", "teleported to " .. plr.Name, "success")
-    else
-        notify("Target", tostring(err), "warning")
-    end
-end)
-
-playerInfoSection:Button("Stick nearest", function()
-    local plr = getNearestPlayer()
-    if not plr then
-        notify("Target", "no nearby player found", "warning")
-        return
-    end
-
-    S.selectedPlayer = plr.Name
-    S.stickToTarget = true
-    local ok, err = teleportToSelectedTarget()
-    if ok then
-        notify("Target", "sticking to " .. plr.Name, "success")
-    else
-        S.stickToTarget = false
-        notify("Target", tostring(err), "warning")
-    end
-end)
-
-playerInfoSection:Label(function()
-    local plr
-    for _, item in ipairs(Players:GetPlayers()) do
-        if item.Name == S.selectedPlayer then
-            plr = item
-            break
-        end
-    end
-
-    if not plr then
-        return "Target status: none"
-    end
-
-    local char = plr.Character
-    return "Target status: " .. (isKnocked(char) and "KO" or "active")
-end)
-
-playerInfoSection:Label(function()
-    local root = getSelectedTargetRoot()
-    if not root then
-        return "Target body: missing"
-    end
-
-    local pos = root.Position
-    return "Target body: " .. tostring(math.floor(pos.X)) .. ", " .. tostring(math.floor(pos.Y)) .. ", " .. tostring(math.floor(pos.Z))
-end)
-
-playerInfoSection:Button("Teleport selected", function()
-    local root = getRoot()
-    local before = root and root.Position
-    local ok, err = teleportToSelectedTarget()
-    if ok then
-        print("Better Void teleport:", tostring(S.selectedPlayer), before, getRoot() and getRoot().Position)
-        notify("Target", "teleported to " .. tostring(S.selectedPlayer), "success")
-    else
-        notify("Target", tostring(err), "warning")
-    end
-end)
-
-playerInfoSection:Button("Stick selected", function()
-    S.stickToTarget = true
-    local ok, err = teleportToSelectedTarget()
-    if ok then
-        notify("Target", "sticking to " .. tostring(S.selectedPlayer), "success")
-    else
-        S.stickToTarget = false
-        notify("Target", tostring(err), "warning")
-    end
-end)
-
-playerInfoSection:Button("Stop sticking", function()
-    S.stickToTarget = false
-    notify("Target", "stick stopped", "warning")
-end)
-
-playerInfoSection:Slider("Stick height", S.stickHeight, 0.5, 0, 15, " studs", function(v)
-    S.stickHeight = math.max(0, v)
-    saveConfig()
-end)
-
-playerInfoSection:Slider("Stick behind", S.stickBehind, 0.5, -10, 10, " studs", function(v)
-    S.stickBehind = v
-    saveConfig()
-end)
-
-playerInfoSection:Button("Clear target", function()
-    S.selectedPlayer = nil
-    S.stickToTarget = false
-    notify("Target", "cleared", "warning")
-end)
 
 toggle = controls:Toggle("Better Void", false, function(on)
     setEnabled(on)
@@ -789,12 +463,17 @@ controls:Slider("Return height", S.returnHeight, 1, 0, 50, " studs", function(v)
     saveConfig()
 end)
 
-shootAssistToggle = shootingControls:Toggle("Shoot assist", S.shootAssist, function(on)
+shootAssistToggle = shootingControls:Toggle("Aim stabilizer", S.shootAssist, function(on)
     S.shootAssist = on and true or false
     saveConfig()
 end)
 
-shootingControls:Slider("Hold time", S.shootHoldTime, 0.01, 0.05, 1, "s", function(v)
+shootingControls:Toggle("Stabilize on aim", S.stabilizeOnAim, function(on)
+    S.stabilizeOnAim = on and true or false
+    saveConfig()
+end)
+
+shootingControls:Slider("Hold time", S.shootHoldTime, 0.01, 0.05, 2, "s", function(v)
     S.shootHoldTime = math.max(0.05, v)
     saveConfig()
 end)
@@ -945,7 +624,10 @@ info:Label(function()
     return "Radius: " .. tostring(S.roamRadius)
 end)
 info:Label(function()
-    return "Shoot assist: " .. (S.shootAssist and "ON" or "OFF")
+    return "Aim stabilizer: " .. (S.shootAssist and "ON" or "OFF")
+end)
+info:Label(function()
+    return "Stabilize on aim: " .. (S.stabilizeOnAim and "ON" or "OFF")
 end)
 info:Label(function()
     return "Hold time: " .. tostring(S.shootHoldTime) .. "s"
@@ -1005,12 +687,14 @@ end
 task.spawn(function()
     local lastV = false
     local lastX = false
-    local lastMouse1 = false
+    local lastAim = false
 
     while S.running do
         local v = iskeypressed(118)
         local x = iskeypressed(120)
         local mouse1 = ismouse1pressed and ismouse1pressed()
+        local mouse2 = ismouse2pressed and ismouse2pressed()
+        local aiming = mouse1 or (S.stabilizeOnAim and mouse2)
 
         if v and not lastV then
             setEnabled(not S.enabled)
@@ -1026,37 +710,23 @@ task.spawn(function()
             break
         end
 
-        if S.enabled and S.shootAssist and mouse1 then
+        if S.enabled and S.shootAssist and aiming then
             local root = getRoot()
-            if root and not lastMouse1 then
+            if root and not lastAim then
                 S.shootLockX = root.Position.X
                 S.shootLockY = root.Position.Y
                 S.shootLockZ = root.Position.Z
             end
             S.shootAssistUntil = tick() + S.shootHoldTime
-            if not lastMouse1 then
+            if not lastAim then
                 S.snapBurstUntil = tick() + 0.25
             end
         end
 
         lastV = v
         lastX = x
-        lastMouse1 = mouse1
+        lastAim = aiming
         task.wait(0.02)
-    end
-end)
-
-task.spawn(function()
-    while S.running do
-        if S.stickToTarget then
-            if not teleportToSelectedTarget() then
-                S.stickToTarget = false
-                notify("Target", "stick stopped; target missing", "warning")
-            end
-            task.wait(0.08)
-        else
-            task.wait(0.2)
-        end
     end
 end)
 
@@ -1080,11 +750,6 @@ end)
 task.spawn(function()
     while S.running do
         if S.enabled then
-            if S.stickToTarget or tick() < S.targetHoldUntil then
-                task.wait(0.05)
-                continue
-            end
-
             local root = getRoot()
 
             if root then
