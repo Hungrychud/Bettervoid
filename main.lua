@@ -62,6 +62,10 @@ local S = {
     shootLockX = nil,
     shootLockY = nil,
     shootLockZ = nil,
+    autoStomp = false,
+    stompRange = 85,
+    stompDelay = 0.35,
+    lastStompAt = 0,
     anchorX = nil,
     anchorY = nil,
     anchorZ = nil,
@@ -85,7 +89,10 @@ local CONFIG_KEYS = {
     "roamSpeed",
     "returnHeight",
     "shootAssist",
-    "shootHoldTime"
+    "shootHoldTime",
+    "autoStomp",
+    "stompRange",
+    "stompDelay"
 }
 
 local function ensureConfigFolder()
@@ -163,6 +170,8 @@ local function loadConfig(slot)
     S.roamSpeed = math.max(1, math.min(40, S.roamSpeed))
     S.returnHeight = math.max(0, math.min(50, S.returnHeight))
     S.shootHoldTime = math.max(0.05, math.min(1, S.shootHoldTime))
+    S.stompRange = math.max(10, math.min(500, S.stompRange))
+    S.stompDelay = math.max(0.1, math.min(2, S.stompDelay))
 
     return true
 end
@@ -198,6 +207,66 @@ local notify
 local function getRoot()
     local char = lp and lp.Character
     return char and char:FindFirstChild("HumanoidRootPart")
+end
+
+local function getCharacterRoot(char)
+    return char and (char:FindFirstChild("HumanoidRootPart") or char:FindFirstChild("UpperTorso") or char:FindFirstChild("Torso"))
+end
+
+local function isKnocked(char)
+    local bodyEffects = char and char:FindFirstChild("BodyEffects")
+    local ko = bodyEffects and bodyEffects:FindFirstChild("K.O")
+    local dead = bodyEffects and bodyEffects:FindFirstChild("Dead")
+
+    return ko and ko.Value == true and not (dead and dead.Value == true)
+end
+
+local function getNearestKnockedTarget(maxRange)
+    local localRoot = getRoot()
+    if not localRoot then
+        return nil
+    end
+
+    local bestChar
+    local bestRoot
+    local bestDist = maxRange or 85
+
+    for _, plr in ipairs(Players:GetPlayers()) do
+        if plr.UserId ~= lp.UserId then
+            local char = plr.Character
+            local root = getCharacterRoot(char)
+            if root and isKnocked(char) then
+                local dist = (root.Position - localRoot.Position).Magnitude
+                if dist <= bestDist then
+                    bestChar = char
+                    bestRoot = root
+                    bestDist = dist
+                end
+            end
+        end
+    end
+
+    return bestChar, bestRoot, bestDist
+end
+
+local function stompTarget(targetRoot)
+    local root = getRoot()
+    local ReplicatedStorage = game:GetService("ReplicatedStorage")
+    local remotes = ReplicatedStorage and ReplicatedStorage:FindFirstChild("GameRemotes")
+    local mainRemote = remotes and remotes:FindFirstChild("MainGameEvent")
+
+    if not root or not targetRoot or not mainRemote then
+        return false
+    end
+
+    pcall(function()
+        root.CFrame = CFrame.new(targetRoot.Position + Vector3.new(0, 3, 0))
+        root.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
+        root.CanCollide = true
+    end)
+
+    mainRemote:FireServer("Stomp")
+    return true
 end
 
 notify = function(title, text, kind)
@@ -368,6 +437,21 @@ shootingControls:Slider("Hold time", S.shootHoldTime, 0.01, 0.05, 1, "s", functi
     saveConfig()
 end)
 
+shootingControls:Toggle("Auto stomp", S.autoStomp, function(on)
+    S.autoStomp = on and true or false
+    saveConfig()
+end)
+
+shootingControls:Slider("Stomp range", S.stompRange, 5, 10, 500, " studs", function(v)
+    S.stompRange = math.floor(v)
+    saveConfig()
+end)
+
+shootingControls:Slider("Stomp delay", S.stompDelay, 0.05, 0.1, 2, "s", function(v)
+    S.stompDelay = math.max(0.1, v)
+    saveConfig()
+end)
+
 controls:Divider("Presets")
 
 controls:Button("Above map", function()
@@ -490,6 +574,12 @@ info:Label(function()
     return "Hold time: " .. tostring(S.shootHoldTime) .. "s"
 end)
 info:Label(function()
+    return "Auto stomp: " .. (S.autoStomp and "ON" or "OFF")
+end)
+info:Label(function()
+    return "Stomp range: " .. tostring(S.stompRange)
+end)
+info:Label(function()
     local root = getRoot()
     return "Y position: " .. (root and tostring(math.floor(root.Position.Y)) or "none")
 end)
@@ -570,6 +660,27 @@ task.spawn(function()
         lastX = x
         lastMouse1 = mouse1
         task.wait(0.02)
+    end
+end)
+
+task.spawn(function()
+    while S.running do
+        if S.autoStomp then
+            local now = tick()
+            if now - S.lastStompAt >= S.stompDelay then
+                local _, targetRoot = getNearestKnockedTarget(S.stompRange)
+                if targetRoot and stompTarget(targetRoot) then
+                    S.lastStompAt = now
+                    S.shootAssistUntil = now + 0.12
+                    S.shootLockX = targetRoot.Position.X
+                    S.shootLockY = targetRoot.Position.Y + 3
+                    S.shootLockZ = targetRoot.Position.Z
+                end
+            end
+            task.wait(0.08)
+        else
+            task.wait(0.25)
+        end
     end
 end)
 
