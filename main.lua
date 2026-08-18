@@ -48,9 +48,9 @@ Lib = Lib or INSUI or INSui
 local S = {
     enabled = false,
     running = true,
-    depth = -650,
+    height = 650,
     rate = 0.08,
-    velocity = -1200,
+    velocity = 1200,
     antiSnap = true,
     roam = true,
     roamRadius = 900,
@@ -186,16 +186,16 @@ if toggle and toggle.AddKeybind then
     toggle:AddKeybind("v", "Toggle")
 end
 
-controls:Slider("Void height", 650, 25, 100, 10000, "", function(v)
-    S.depth = -math.floor(v)
+controls:Slider("Up height", 650, 25, 100, 10000, "", function(v)
+    S.height = math.floor(v)
 end)
 
 controls:Slider("Tick delay", 0.08, 0.01, 0.03, 0.5, "s", function(v)
     S.rate = math.max(0.03, v)
 end)
 
-controls:Slider("Fall velocity", 1200, 100, 500, 5000, "", function(v)
-    S.velocity = -math.floor(v)
+controls:Slider("Up velocity", 1200, 100, 500, 5000, "", function(v)
+    S.velocity = math.floor(v)
 end)
 
 controls:Toggle("Anti snapback", true, function(on)
@@ -220,31 +220,31 @@ end)
 
 controls:Divider("Presets")
 
-controls:Button("Under map", function()
-    S.depth = -650
+controls:Button("Above map", function()
+    S.height = 650
     S.rate = 0.08
-    S.velocity = -1200
+    S.velocity = 1200
     S.roamRadius = 900
     S.roamSpeed = 8
-    notify("Preset", "under map selected", "success")
+    notify("Preset", "above map selected", "success")
 end)
 
-controls:Button("Low void", function()
-    S.depth = -2500
+controls:Button("High sky", function()
+    S.height = 2500
     S.rate = 0.06
-    S.velocity = -1800
+    S.velocity = 1800
     S.roamRadius = 1400
     S.roamSpeed = 11
-    notify("Preset", "low void selected", "info")
+    notify("Preset", "high sky selected", "info")
 end)
 
-controls:Button("Deep void", function()
-    S.depth = -10000
+controls:Button("Very high", function()
+    S.height = 10000
     S.rate = 0.05
-    S.velocity = -2500
+    S.velocity = 2500
     S.roamRadius = 2200
     S.roamSpeed = 15
-    notify("Preset", "deep void selected", "warning")
+    notify("Preset", "very high selected", "warning")
 end)
 
 controls:Button("Return to origin", function()
@@ -267,7 +267,7 @@ info:Label(function()
     return "Status: " .. (S.enabled and "ON" or "OFF")
 end)
 info:Label(function()
-    return "Void height: " .. tostring(S.depth)
+    return "Up height: " .. tostring(S.height)
 end)
 info:Label(function()
     return "Tick: " .. tostring(S.rate) .. "s"
@@ -390,7 +390,7 @@ task.spawn(function()
                 end
 
                 pcall(function()
-                    root.CFrame = CFrame.new(S.anchorX + offsetX, S.depth, S.anchorZ + offsetZ)
+                    root.CFrame = CFrame.new(S.anchorX + offsetX, S.anchorY + S.height, S.anchorZ + offsetZ)
                     root.AssemblyLinearVelocity = Vector3.new(0, S.velocity, 0)
                     root.CanCollide = false
                 end)
