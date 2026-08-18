@@ -56,6 +56,7 @@ local S = {
     roamRadius = 900,
     roamSpeed = 8,
     anchorX = nil,
+    anchorY = nil,
     anchorZ = nil,
     snapBurstUntil = 0,
     snapWindowUntil = 0,
@@ -86,6 +87,7 @@ local function setEnabled(on)
         local root = getRoot()
         if root then
             S.anchorX = root.Position.X
+            S.anchorY = root.Position.Y
             S.anchorZ = root.Position.Z
         end
         S.snapBurstUntil = tick() + 1.25
@@ -93,20 +95,24 @@ local function setEnabled(on)
         S.snapCount = 0
         S.lastVoidAt = 0
     else
+        local root = getRoot()
+        if root then
+            pcall(function()
+                if S.anchorX and S.anchorY and S.anchorZ then
+                    root.CFrame = CFrame.new(S.anchorX, S.anchorY + 3, S.anchorZ)
+                end
+                root.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
+                root.CanCollide = true
+            end)
+        end
+
         S.anchorX = nil
+        S.anchorY = nil
         S.anchorZ = nil
         S.snapBurstUntil = 0
         S.snapWindowUntil = 0
         S.snapCount = 0
         S.lastVoidAt = 0
-
-        local root = getRoot()
-        if root then
-            pcall(function()
-                root.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
-                root.CanCollide = true
-            end)
-        end
     end
 
     notify("Better Void", S.enabled and "enabled" or "disabled", S.enabled and "success" or "warning")
@@ -115,6 +121,7 @@ end
 local function stopVoid(reason)
     S.enabled = false
     S.anchorX = nil
+    S.anchorY = nil
     S.anchorZ = nil
     S.snapBurstUntil = 0
     S.snapWindowUntil = 0
@@ -343,8 +350,9 @@ task.spawn(function()
             local root = getRoot()
 
             if root then
-                if not S.anchorX or not S.anchorZ then
+                if not S.anchorX or not S.anchorY or not S.anchorZ then
                     S.anchorX = root.Position.X
+                    S.anchorY = root.Position.Y
                     S.anchorZ = root.Position.Z
                 end
 
@@ -393,6 +401,7 @@ task.spawn(function()
             end
         else
             S.anchorX = nil
+            S.anchorY = nil
             S.anchorZ = nil
             task.wait(0.15)
         end
