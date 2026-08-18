@@ -919,7 +919,7 @@ if toggle and toggle.AddKeybind then
     toggle:AddKeybind("v", "Toggle")
 end
 
-controls:Slider("Up height", S.height, 25, 100, 10000, "", function(v)
+controls:Slider("Up height", S.height, 25, 100, 100000, "", function(v)
     S.height = math.floor(v)
     saveConfig()
 end)
@@ -929,7 +929,7 @@ controls:Slider("Tick delay", S.rate, 0.01, 0.03, 0.5, "s", function(v)
     saveConfig()
 end)
 
-controls:Slider("Up velocity", S.velocity, 100, 500, 5000, "", function(v)
+controls:Slider("Up velocity", S.velocity, 100, 500, 50000, "", function(v)
     S.velocity = math.floor(v)
     saveConfig()
 end)
