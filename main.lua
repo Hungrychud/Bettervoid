@@ -65,6 +65,7 @@ local S = {
     shootLockY = nil,
     shootLockZ = nil,
     autoStomp = false,
+    stompTeleport = true,
     stompHoldUntil = 0,
     stompRange = 350,
     stompHeight = 3,
@@ -99,6 +100,7 @@ local CONFIG_KEYS = {
     "shootHoldTime",
     "stabilizeOnAim",
     "autoStomp",
+    "stompTeleport",
     "stompRange",
     "stompHeight",
     "stompDelay",
@@ -287,22 +289,24 @@ local function stompTarget(targetRoot)
         return false
     end
 
-    local stompPos = targetRoot.Position + Vector3.new(0, S.stompHeight, 0)
-    local stompCf = CFrame.new(stompPos.X, stompPos.Y, stompPos.Z)
-    S.stompHoldUntil = tick() + 0.25
-    S.shootLockCFrame = stompCf
-    S.shootLockX = stompPos.X
-    S.shootLockY = stompPos.Y
-    S.shootLockZ = stompPos.Z
+    if S.stompTeleport then
+        local stompPos = targetRoot.Position + Vector3.new(0, S.stompHeight, 0)
+        local stompCf = CFrame.new(stompPos.X, stompPos.Y, stompPos.Z)
+        S.stompHoldUntil = tick() + 0.25
+        S.shootLockCFrame = stompCf
+        S.shootLockX = stompPos.X
+        S.shootLockY = stompPos.Y
+        S.shootLockZ = stompPos.Z
 
-    pcall(function()
-        root.CFrame = stompCf
-        root.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
-        root.CanCollide = true
-    end)
+        pcall(function()
+            root.CFrame = stompCf
+            root.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
+            root.CanCollide = true
+        end)
+    end
 
     mainRemote:FireServer("Stomp")
-    S.lastStompStatus = "stomp fired"
+    S.lastStompStatus = S.stompTeleport and "stomp fired" or "stomp fired without teleport"
 
     return true
 end
@@ -489,6 +493,11 @@ shootingControls:Toggle("Auto stomp", S.autoStomp, function(on)
     saveConfig()
 end)
 
+shootingControls:Toggle("Teleport stomp", S.stompTeleport, function(on)
+    S.stompTeleport = on and true or false
+    saveConfig()
+end)
+
 shootingControls:Slider("Stomp range", S.stompRange, 5, 10, 10000, " studs", function(v)
     S.stompRange = math.floor(v)
     saveConfig()
@@ -640,6 +649,9 @@ info:Label(function()
 end)
 info:Label(function()
     return "Auto stomp: " .. (S.autoStomp and "ON" or "OFF")
+end)
+info:Label(function()
+    return "Teleport stomp: " .. (S.stompTeleport and "ON" or "OFF")
 end)
 info:Label(function()
     return "Stomp range: " .. tostring(S.stompRange)
