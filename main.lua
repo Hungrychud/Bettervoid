@@ -65,6 +65,7 @@ local S = {
     shootLockY = nil,
     shootLockZ = nil,
     autoStomp = false,
+    stompHoldUntil = 0,
     stompRange = 350,
     stompHeight = 1,
     stompDelay = 0.35,
@@ -251,7 +252,7 @@ local function getNearestKnockedTarget(maxRange)
     for _, plr in ipairs(Players:GetPlayers()) do
         if plr.UserId ~= lp.UserId then
             local char = plr.Character
-            local root = getHumanoidRootPart(char)
+            local root = getCharacterRoot(char)
             if root and isKnocked(char) then
                 local delta = root.Position - localPos
                 local dist
@@ -284,7 +285,8 @@ local function stompTarget(targetRoot)
         return false
     end
 
-    S.shootAssistUntil = tick() + (S.stompRepeats * S.stompInterval) + 0.45
+    local holdTime = (S.stompRepeats * S.stompInterval) + 0.65
+    S.stompHoldUntil = tick() + holdTime
 
     for _ = 1, S.stompRepeats do
         root = getRoot()
@@ -304,8 +306,9 @@ local function stompTarget(targetRoot)
             root.CanCollide = true
         end)
 
+        task.wait(0.03)
         mainRemote:FireServer("Stomp")
-        task.wait(S.stompInterval)
+        task.wait(math.max(0.03, S.stompInterval - 0.03))
     end
 
     return true
@@ -350,6 +353,7 @@ local function setEnabled(on)
         S.shootLockX = nil
         S.shootLockY = nil
         S.shootLockZ = nil
+        S.stompHoldUntil = 0
         S.snapBurstUntil = 0
         S.snapWindowUntil = 0
         S.snapCount = 0
@@ -368,6 +372,7 @@ local function stopVoid(reason)
     S.shootLockX = nil
     S.shootLockY = nil
     S.shootLockZ = nil
+    S.stompHoldUntil = 0
     S.snapBurstUntil = 0
     S.snapWindowUntil = 0
     S.snapCount = 0
@@ -787,18 +792,20 @@ task.spawn(function()
                 end
 
                 local shooting = S.shootAssist and t < S.shootAssistUntil
+                local stomping = t < S.stompHoldUntil
+                local holding = shooting or stomping
                 local burst = S.antiSnap and t < S.snapBurstUntil
                 local offsetX = 0
                 local offsetZ = 0
 
-                if S.roam and not shooting then
+                if S.roam and not holding then
                     local phase = t * S.roamSpeed
                     offsetX = (math.cos(phase) * S.roamRadius) + (math.sin(phase * 1.7) * S.roamRadius * 0.35)
                     offsetZ = (math.sin(phase) * S.roamRadius) + (math.cos(phase * 1.3) * S.roamRadius * 0.35)
                 end
 
                 pcall(function()
-                    if shooting then
+                    if holding then
                         if not S.shootLockCFrame then
                             S.shootLockCFrame = root.CFrame
                         end
@@ -822,7 +829,7 @@ task.spawn(function()
                 end)
                 S.lastVoidAt = t
 
-                if shooting then
+                if holding then
                     task.wait(0.02)
                 elseif burst then
                     task.wait(0.045)
@@ -840,6 +847,7 @@ task.spawn(function()
             S.shootLockX = nil
             S.shootLockY = nil
             S.shootLockZ = nil
+            S.stompHoldUntil = 0
             task.wait(0.15)
         end
     end
