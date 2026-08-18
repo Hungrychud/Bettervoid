@@ -66,6 +66,79 @@ local S = {
     conns = {}
 }
 
+local CONFIG_FOLDER = "BetterVoid"
+local CONFIG_FILE = CONFIG_FOLDER .. "/bettervoid.cfg"
+local CONFIG_KEYS = {
+    "height",
+    "rate",
+    "velocity",
+    "antiSnap",
+    "roam",
+    "roamRadius",
+    "roamSpeed",
+    "returnHeight"
+}
+
+local function ensureConfigFolder()
+    if isfolder and not isfolder(CONFIG_FOLDER) and makefolder then
+        pcall(function()
+            makefolder(CONFIG_FOLDER)
+        end)
+    end
+end
+
+local function saveConfig()
+    if not writefile then
+        return false, "writefile missing"
+    end
+
+    ensureConfigFolder()
+
+    local lines = {}
+    for _, key in ipairs(CONFIG_KEYS) do
+        lines[#lines + 1] = key .. "=" .. tostring(S[key])
+    end
+
+    local ok, err = pcall(function()
+        writefile(CONFIG_FILE, table.concat(lines, "\n"))
+    end)
+
+    return ok, err
+end
+
+local function loadConfig()
+    if not readfile or not isfile or not isfile(CONFIG_FILE) then
+        return false
+    end
+
+    local ok, data = pcall(function()
+        return readfile(CONFIG_FILE)
+    end)
+
+    if not ok or type(data) ~= "string" then
+        return false, data
+    end
+
+    for line in string.gmatch(data, "[^\r\n]+") do
+        local key, raw = string.match(line, "^([%w_]+)=(.+)$")
+        if key and S[key] ~= nil then
+            local currentType = type(S[key])
+            if currentType == "boolean" then
+                S[key] = raw == "true"
+            elseif currentType == "number" then
+                local value = tonumber(raw)
+                if value then
+                    S[key] = value
+                end
+            end
+        end
+    end
+
+    return true
+end
+
+local loadedConfig = loadConfig()
+
 _G.BetterVoid = S
 
 local toggle
@@ -186,36 +259,44 @@ if toggle and toggle.AddKeybind then
     toggle:AddKeybind("v", "Toggle")
 end
 
-controls:Slider("Up height", 650, 25, 100, 10000, "", function(v)
+controls:Slider("Up height", S.height, 25, 100, 10000, "", function(v)
     S.height = math.floor(v)
+    saveConfig()
 end)
 
-controls:Slider("Tick delay", 0.08, 0.01, 0.03, 0.5, "s", function(v)
+controls:Slider("Tick delay", S.rate, 0.01, 0.03, 0.5, "s", function(v)
     S.rate = math.max(0.03, v)
+    saveConfig()
 end)
 
-controls:Slider("Up velocity", 1200, 100, 500, 5000, "", function(v)
+controls:Slider("Up velocity", S.velocity, 100, 500, 5000, "", function(v)
     S.velocity = math.floor(v)
+    saveConfig()
 end)
 
-controls:Toggle("Anti snapback", true, function(on)
+controls:Toggle("Anti snapback", S.antiSnap, function(on)
     S.antiSnap = on and true or false
+    saveConfig()
 end)
 
-controls:Toggle("Map roam", true, function(on)
+controls:Toggle("Map roam", S.roam, function(on)
     S.roam = on and true or false
+    saveConfig()
 end)
 
-controls:Slider("Roam radius", 900, 50, 100, 5000, "", function(v)
+controls:Slider("Roam radius", S.roamRadius, 50, 100, 5000, "", function(v)
     S.roamRadius = math.floor(v)
+    saveConfig()
 end)
 
-controls:Slider("Roam speed", 8, 1, 1, 40, "", function(v)
+controls:Slider("Roam speed", S.roamSpeed, 1, 1, 40, "", function(v)
     S.roamSpeed = math.floor(v)
+    saveConfig()
 end)
 
-controls:Slider("Return height", 3, 1, 0, 50, " studs", function(v)
+controls:Slider("Return height", S.returnHeight, 1, 0, 50, " studs", function(v)
     S.returnHeight = math.floor(v)
+    saveConfig()
 end)
 
 controls:Divider("Presets")
@@ -226,6 +307,7 @@ controls:Button("Above map", function()
     S.velocity = 1200
     S.roamRadius = 900
     S.roamSpeed = 8
+    saveConfig()
     notify("Preset", "above map selected", "success")
 end)
 
@@ -235,6 +317,7 @@ controls:Button("High sky", function()
     S.velocity = 1800
     S.roamRadius = 1400
     S.roamSpeed = 11
+    saveConfig()
     notify("Preset", "high sky selected", "info")
 end)
 
@@ -244,7 +327,17 @@ controls:Button("Very high", function()
     S.velocity = 2500
     S.roamRadius = 2200
     S.roamSpeed = 15
+    saveConfig()
     notify("Preset", "very high selected", "warning")
+end)
+
+controls:Button("Save config", function()
+    local ok, err = saveConfig()
+    if ok then
+        notify("Config", "saved", "success")
+    else
+        notify("Config", "save failed: " .. tostring(err), "error")
+    end
 end)
 
 controls:Button("Return to origin", function()
@@ -412,6 +505,10 @@ task.spawn(function()
         end
     end
 end)
+
+if loadedConfig then
+    notify("Config", "loaded", "success")
+end
 
 notify("Better Void", "loaded. Press P to toggle the menu.", "success")
 end
