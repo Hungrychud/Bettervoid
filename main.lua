@@ -57,6 +57,9 @@ local S = {
     roamSpeed = 8,
     returnHeight = 3,
     shootAssist = true,
+    instantShoot = true,
+    instantShootDelay = 0.01,
+    lastInstantShotAt = 0,
     shootHoldTime = 0.65,
     stabilizeOnAim = true,
     shootAssistUntil = 0,
@@ -97,6 +100,8 @@ local CONFIG_KEYS = {
     "roamSpeed",
     "returnHeight",
     "shootAssist",
+    "instantShoot",
+    "instantShootDelay",
     "shootHoldTime",
     "stabilizeOnAim",
     "autoStomp",
@@ -182,6 +187,7 @@ local function loadConfig(slot)
     S.roamRadius = math.max(100, math.min(5000, S.roamRadius))
     S.roamSpeed = math.max(1, math.min(40, S.roamSpeed))
     S.returnHeight = math.max(0, math.min(50, S.returnHeight))
+    S.instantShootDelay = math.max(0.01, math.min(0.2, S.instantShootDelay))
     S.shootHoldTime = math.max(0.05, math.min(2, S.shootHoldTime))
     S.stompRange = math.max(10, math.min(1000, S.stompRange))
     S.stompHeight = math.max(0, math.min(8, S.stompHeight))
@@ -193,6 +199,7 @@ local function loadConfig(slot)
 end
 
 local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local SHOOTER_TABLE = {
     ["[Revolver]"] = {
@@ -232,6 +239,14 @@ local function applyShooterContainer(container)
     end
 end
 
+local function applyLoadoutShooterSettings()
+    local assets = ReplicatedStorage and ReplicatedStorage:FindFirstChild("Assets")
+    local loadout = assets and assets:FindFirstChild("Loadout")
+    if loadout then
+        applyShooterContainer(loadout)
+    end
+end
+
 local function applyShooterPlayer(player)
     if not player then
         return
@@ -243,6 +258,8 @@ end
 
 task.spawn(function()
     while S.running do
+        applyLoadoutShooterSettings()
+
         for _, player in ipairs(Players:GetPlayers()) do
             applyShooterPlayer(player)
         end
@@ -283,6 +300,95 @@ local notify
 local function getRoot()
     local char = lp and lp.Character
     return char and char:FindFirstChild("HumanoidRootPart")
+end
+
+local function getEquippedShooter()
+    local char = lp and lp.Character
+    if not char then
+        return nil
+    end
+
+    for _, child in ipairs(char:GetChildren()) do
+        if child.ClassName == "Tool" and SHOOTER_TABLE[child.Name] then
+            return child
+        end
+    end
+
+    return nil
+end
+
+local function getShotOrigin(tool, handle)
+    local origin = handle.Position
+    local default = tool:FindFirstChild("Default")
+    local mesh = default and default:FindFirstChild("Mesh")
+    local muzzle = mesh and mesh:FindFirstChild("Muzzle")
+    if muzzle and muzzle.WorldPosition then
+        origin = muzzle.WorldPosition
+    end
+    return origin
+end
+
+local function traceInstantShot(origin, rangeValue, spread)
+    local camera = workspace.CurrentCamera
+    local direction = camera and camera.CFrame.LookVector or Vector3.new(0, 0, -1)
+    if spread and spread > 0 then
+        direction = (direction + Vector3.new(
+            (math.random() - 0.5) * spread,
+            (math.random() - 0.5) * spread,
+            (math.random() - 0.5) * spread
+        )).Unit
+    end
+
+    local params = RaycastParams.new()
+    params.FilterDescendantsInstances = { lp.Character }
+    params.FilterType = Enum.RaycastFilterType.Exclude
+    params.IgnoreWater = true
+
+    local hit = workspace:Raycast(origin, direction * rangeValue, params)
+    if hit then
+        return hit.Instance, hit.Position, hit.Normal, origin + direction * rangeValue
+    end
+
+    return nil, origin + direction * rangeValue, nil, origin + direction * rangeValue
+end
+
+local function fireInstantShot(tool)
+    if not tool then
+        return false
+    end
+
+    local ammo = tool:FindFirstChild("Ammo")
+    local handle = tool:FindFirstChild("Handle")
+    local range = tool:FindFirstChild("Range")
+    local damage = tool:FindFirstChild("Damage")
+    local remotes = ReplicatedStorage and ReplicatedStorage:FindFirstChild("GameRemotes")
+    local mainRemote = remotes and remotes:FindFirstChild("MainGameEvent")
+
+    if not ammo or ammo.Value < 1 or not handle or not range or not damage or not mainRemote then
+        return false
+    end
+
+    local origin = getShotOrigin(tool, handle)
+    local rangeValue = range.Value
+
+    if tool.Name == "[Double-Barrel SG]" or tool.Name == "[TacticalShotgun]" then
+        local shots = {}
+        for _ = 1, 5 do
+            local hit, pos, normal, aimPosition = traceInstantShot(origin, rangeValue, 0.1)
+            shots[#shots + 1] = {
+                AimPosition = aimPosition,
+                Result1 = hit,
+                Result2 = pos,
+                Result3 = normal
+            }
+        end
+        mainRemote:FireServer("ShootGun", handle, origin, shots, nil, nil, nil, rangeValue, damage.Value)
+    else
+        local hit, pos, normal = traceInstantShot(origin, rangeValue, 0)
+        mainRemote:FireServer("ShootGun", handle, origin, nil, hit, pos, normal, rangeValue, damage.Value)
+    end
+
+    return true
 end
 
 local function getCharacterRoot(char)
@@ -538,6 +644,16 @@ shootAssistToggle = shootingControls:Toggle("Aim stabilizer", S.shootAssist, fun
     saveConfig()
 end)
 
+shootingControls:Toggle("Instant shoot", S.instantShoot, function(on)
+    S.instantShoot = on and true or false
+    saveConfig()
+end)
+
+shootingControls:Slider("Shoot delay", S.instantShootDelay, 0.005, 0.01, 0.2, "s", function(v)
+    S.instantShootDelay = math.max(0.01, v)
+    saveConfig()
+end)
+
 shootingControls:Toggle("Stabilize on aim", S.stabilizeOnAim, function(on)
     S.stabilizeOnAim = on and true or false
     saveConfig()
@@ -702,6 +818,12 @@ info:Label(function()
     return "Aim stabilizer: " .. (S.shootAssist and "ON" or "OFF")
 end)
 info:Label(function()
+    return "Instant shoot: " .. (S.instantShoot and "ON" or "OFF")
+end)
+info:Label(function()
+    return "Shoot delay: " .. tostring(S.instantShootDelay) .. "s"
+end)
+info:Label(function()
     return "Stabilize on aim: " .. (S.stabilizeOnAim and "ON" or "OFF")
 end)
 info:Label(function()
@@ -789,6 +911,16 @@ task.spawn(function()
         if x and not lastX then
             S.unload()
             break
+        end
+
+        if S.instantShoot and mouse1 then
+            local now = tick()
+            if now - S.lastInstantShotAt >= S.instantShootDelay then
+                local tool = getEquippedShooter()
+                if tool and fireInstantShot(tool) then
+                    S.lastInstantShotAt = now
+                end
+            end
         end
 
         if S.enabled and S.shootAssist and aiming then
