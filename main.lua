@@ -57,12 +57,10 @@ local S = {
     roamSpeed = 8,
     returnHeight = 3,
     shootAssist = true,
-    shootHoldTime = 0.35,
+    shootHoldTime = 0.65,
     stabilizeOnAim = true,
-    faceCameraOnAim = true,
-    aimDistance = 15000,
-    aimRaycastFocus = false,
     shootAssistUntil = 0,
+    shootLockCFrame = nil,
     shootLockX = nil,
     shootLockY = nil,
     shootLockZ = nil,
@@ -98,9 +96,6 @@ local CONFIG_KEYS = {
     "shootAssist",
     "shootHoldTime",
     "stabilizeOnAim",
-    "faceCameraOnAim",
-    "aimDistance",
-    "aimRaycastFocus",
     "autoStomp",
     "stompRange",
     "stompHeight",
@@ -184,7 +179,6 @@ local function loadConfig(slot)
     S.roamSpeed = math.max(1, math.min(40, S.roamSpeed))
     S.returnHeight = math.max(0, math.min(50, S.returnHeight))
     S.shootHoldTime = math.max(0.05, math.min(2, S.shootHoldTime))
-    S.aimDistance = math.max(1000, math.min(50000, S.aimDistance))
     S.stompRange = math.max(10, math.min(1000, S.stompRange))
     S.stompHeight = math.max(0, math.min(8, S.stompHeight))
     S.stompDelay = math.max(0.1, math.min(2, S.stompDelay))
@@ -225,64 +219,6 @@ local notify
 local function getRoot()
     local char = lp and lp.Character
     return char and char:FindFirstChild("HumanoidRootPart")
-end
-
-local function getCamera()
-    if not workspace then
-        return nil
-    end
-
-    local okCurrent, current = pcall(function()
-        return workspace.CurrentCamera
-    end)
-    if okCurrent and current then
-        return current
-    end
-
-    local cam = workspace:FindFirstChildOfClass("Camera")
-    if cam then
-        return cam
-    end
-
-    return workspace:FindFirstChild("Camera")
-end
-
-local function getAimLockCFrame(pos)
-    if not S.faceCameraOnAim then
-        return CFrame.new(pos)
-    end
-
-    local cam = getCamera()
-    local camCf = cam and cam.CFrame
-    local look = camCf and camCf.LookVector
-
-    if not look or look.Magnitude <= 0 then
-        return CFrame.new(pos)
-    end
-
-    local origin = cam.Position or camCf.Position
-    if not origin then
-        return CFrame.lookAt(pos, pos + look.Unit)
-    end
-
-    local aimDistance = math.max(1000, math.min(50000, S.aimDistance or 15000))
-    local aimPoint = origin + (look.Unit * aimDistance)
-
-    if S.aimRaycastFocus and workspace then
-        local ok, hit = pcall(function()
-            return workspace:Raycast(origin, look.Unit * aimDistance)
-        end)
-
-        if ok and hit and hit.Position then
-            aimPoint = hit.Position
-        end
-    end
-
-    if (aimPoint - pos).Magnitude > 0.1 then
-        return CFrame.lookAt(pos, aimPoint)
-    end
-
-    return CFrame.lookAt(pos, pos + look.Unit)
 end
 
 local function getCharacterRoot(char)
@@ -357,6 +293,7 @@ local function stompTarget(targetRoot)
         end
 
         local stompPos = targetRoot.Position + Vector3.new(0, S.stompHeight, 0)
+        S.shootLockCFrame = CFrame.new(stompPos)
         S.shootLockX = stompPos.X
         S.shootLockY = stompPos.Y
         S.shootLockZ = stompPos.Z
@@ -409,6 +346,7 @@ local function setEnabled(on)
         S.anchorX = nil
         S.anchorY = nil
         S.anchorZ = nil
+        S.shootLockCFrame = nil
         S.shootLockX = nil
         S.shootLockY = nil
         S.shootLockZ = nil
@@ -426,6 +364,7 @@ local function stopVoid(reason)
     S.anchorX = nil
     S.anchorY = nil
     S.anchorZ = nil
+    S.shootLockCFrame = nil
     S.shootLockX = nil
     S.shootLockY = nil
     S.shootLockZ = nil
@@ -539,21 +478,6 @@ end)
 
 shootingControls:Toggle("Stabilize on aim", S.stabilizeOnAim, function(on)
     S.stabilizeOnAim = on and true or false
-    saveConfig()
-end)
-
-shootingControls:Toggle("Face freecam aim", S.faceCameraOnAim, function(on)
-    S.faceCameraOnAim = on and true or false
-    saveConfig()
-end)
-
-shootingControls:Slider("Aim convergence", S.aimDistance, 500, 1000, 50000, " studs", function(v)
-    S.aimDistance = math.floor(v)
-    saveConfig()
-end)
-
-shootingControls:Toggle("Raycast focus", S.aimRaycastFocus, function(on)
-    S.aimRaycastFocus = on and true or false
     saveConfig()
 end)
 
@@ -714,15 +638,6 @@ info:Label(function()
     return "Stabilize on aim: " .. (S.stabilizeOnAim and "ON" or "OFF")
 end)
 info:Label(function()
-    return "Face freecam aim: " .. (S.faceCameraOnAim and "ON" or "OFF")
-end)
-info:Label(function()
-    return "Aim convergence: " .. tostring(S.aimDistance)
-end)
-info:Label(function()
-    return "Raycast focus: " .. (S.aimRaycastFocus and "ON" or "OFF")
-end)
-info:Label(function()
     return "Hold time: " .. tostring(S.shootHoldTime) .. "s"
 end)
 info:Label(function()
@@ -806,6 +721,7 @@ task.spawn(function()
         if S.enabled and S.shootAssist and aiming then
             local root = getRoot()
             if root and not lastAim then
+                S.shootLockCFrame = root.CFrame
                 S.shootLockX = root.Position.X
                 S.shootLockY = root.Position.Y
                 S.shootLockZ = root.Position.Z
@@ -883,16 +799,19 @@ task.spawn(function()
 
                 pcall(function()
                     if shooting then
+                        if not S.shootLockCFrame then
+                            S.shootLockCFrame = root.CFrame
+                        end
                         if not S.shootLockX or not S.shootLockY or not S.shootLockZ then
                             S.shootLockX = root.Position.X
                             S.shootLockY = root.Position.Y
                             S.shootLockZ = root.Position.Z
                         end
-                        local lockPos = Vector3.new(S.shootLockX, S.shootLockY, S.shootLockZ)
-                        root.CFrame = getAimLockCFrame(lockPos)
+                        root.CFrame = S.shootLockCFrame
                         root.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
                         root.CanCollide = true
                     else
+                        S.shootLockCFrame = nil
                         S.shootLockX = nil
                         S.shootLockY = nil
                         S.shootLockZ = nil
@@ -917,6 +836,7 @@ task.spawn(function()
             S.anchorX = nil
             S.anchorY = nil
             S.anchorZ = nil
+            S.shootLockCFrame = nil
             S.shootLockX = nil
             S.shootLockY = nil
             S.shootLockZ = nil
