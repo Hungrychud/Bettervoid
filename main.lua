@@ -56,6 +56,9 @@ local S = {
     roamRadius = 900,
     roamSpeed = 8,
     returnHeight = 3,
+    shootAssist = true,
+    shootAssistHeight = 3,
+    shootAssistUntil = 0,
     anchorX = nil,
     anchorY = nil,
     anchorZ = nil,
@@ -76,7 +79,9 @@ local CONFIG_KEYS = {
     "roam",
     "roamRadius",
     "roamSpeed",
-    "returnHeight"
+    "returnHeight",
+    "shootAssist",
+    "shootAssistHeight"
 }
 
 local function ensureConfigFolder()
@@ -166,6 +171,8 @@ local roamToggle
 local roamRadiusSlider
 local roamSpeedSlider
 local returnHeightSlider
+local shootAssistToggle
+local shootAssistHeightSlider
 
 local function syncConfigControls()
     local pairsToSync = {
@@ -176,7 +183,9 @@ local function syncConfigControls()
         { roamToggle, S.roam },
         { roamRadiusSlider, S.roamRadius },
         { roamSpeedSlider, S.roamSpeed },
-        { returnHeightSlider, S.returnHeight }
+        { returnHeightSlider, S.returnHeight },
+        { shootAssistToggle, S.shootAssist },
+        { shootAssistHeightSlider, S.shootAssistHeight }
     }
 
     for _, item in ipairs(pairsToSync) do
@@ -340,6 +349,16 @@ returnHeightSlider = controls:Slider("Return height", S.returnHeight, 1, 0, 50, 
     saveConfig()
 end)
 
+shootAssistToggle = controls:Toggle("Shoot assist", S.shootAssist, function(on)
+    S.shootAssist = on and true or false
+    saveConfig()
+end)
+
+shootAssistHeightSlider = controls:Slider("Shoot height", S.shootAssistHeight, 1, 0, 50, " studs", function(v)
+    S.shootAssistHeight = math.floor(v)
+    saveConfig()
+end)
+
 controls:Divider("Presets")
 
 controls:Button("Above map", function()
@@ -440,6 +459,12 @@ info:Label(function()
     return "Radius: " .. tostring(S.roamRadius)
 end)
 info:Label(function()
+    return "Shoot assist: " .. (S.shootAssist and "ON" or "OFF")
+end)
+info:Label(function()
+    return "Shoot height: " .. tostring(S.shootAssistHeight)
+end)
+info:Label(function()
     local root = getRoot()
     return "Y position: " .. (root and tostring(math.floor(root.Position.Y)) or "none")
 end)
@@ -482,10 +507,12 @@ end
 task.spawn(function()
     local lastV = false
     local lastX = false
+    local lastMouse1 = false
 
     while S.running do
         local v = iskeypressed(118)
         local x = iskeypressed(120)
+        local mouse1 = ismouse1pressed and ismouse1pressed()
 
         if v and not lastV then
             setEnabled(not S.enabled)
@@ -501,9 +528,17 @@ task.spawn(function()
             break
         end
 
+        if S.enabled and S.shootAssist and mouse1 then
+            S.shootAssistUntil = tick() + 0.16
+            if not lastMouse1 then
+                S.snapBurstUntil = tick() + 0.25
+            end
+        end
+
         lastV = v
         lastX = x
-        task.wait(0.04)
+        lastMouse1 = mouse1
+        task.wait(0.02)
     end
 end)
 
@@ -537,24 +572,33 @@ task.spawn(function()
                     S.snapBurstUntil = t + 0.45
                 end
 
+                local shooting = S.shootAssist and t < S.shootAssistUntil
                 local burst = S.antiSnap and t < S.snapBurstUntil
                 local offsetX = 0
                 local offsetZ = 0
 
-                if S.roam then
+                if S.roam and not shooting then
                     local phase = t * S.roamSpeed
                     offsetX = (math.cos(phase) * S.roamRadius) + (math.sin(phase * 1.7) * S.roamRadius * 0.35)
                     offsetZ = (math.sin(phase) * S.roamRadius) + (math.cos(phase * 1.3) * S.roamRadius * 0.35)
                 end
 
                 pcall(function()
-                    root.CFrame = CFrame.new(S.anchorX + offsetX, S.anchorY + S.height, S.anchorZ + offsetZ)
-                    root.AssemblyLinearVelocity = Vector3.new(0, S.velocity, 0)
-                    root.CanCollide = false
+                    if shooting then
+                        root.CFrame = CFrame.new(S.anchorX, S.anchorY + S.shootAssistHeight, S.anchorZ)
+                        root.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
+                        root.CanCollide = true
+                    else
+                        root.CFrame = CFrame.new(S.anchorX + offsetX, S.anchorY + S.height, S.anchorZ + offsetZ)
+                        root.AssemblyLinearVelocity = Vector3.new(0, S.velocity, 0)
+                        root.CanCollide = false
+                    end
                 end)
                 S.lastVoidAt = t
 
-                if burst then
+                if shooting then
+                    task.wait(0.02)
+                elseif burst then
                     task.wait(0.045)
                 else
                     task.wait(S.rate)
