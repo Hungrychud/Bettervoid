@@ -289,6 +289,7 @@ local win = Lib:CreateWindow({
 })
 
 local voidTab = win:Tab("Void", "shield")
+local settingsTab = win:Tab("Settings", "cog")
 local controls = voidTab:Section("Controls", "Left", "stable void loop")
 
 toggle = controls:Toggle("Better Void", false, function(on)
@@ -386,7 +387,7 @@ controls:Button("Return to origin", function()
     end
 end)
 
-local configSection = voidTab:Section("Config", "Right", "BetterVoid/bettervoid.cfg")
+local configSection = settingsTab:Section("Config", "Left", "BetterVoid/bettervoid.cfg")
 configSection:Button("Save", function()
     local ok, err = saveConfig()
     if ok then
