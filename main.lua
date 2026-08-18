@@ -20,6 +20,10 @@ _G.BetterVoidGUI = S
 
 local depths = { -25000, -50000, -100000 }
 local rates = { 0.25, 0.18, 0.12 }
+local KEY_B = 98
+local KEY_N = 110
+local KEY_V = 118
+local KEY_X = 120
 
 local function add(obj)
     S.drawings[#S.drawings + 1] = obj
@@ -111,15 +115,54 @@ refresh()
 S.conns[#S.conns + 1] = UIS.InputBegan:Connect(function(input)
     local key = input.KeyCode
 
-    if key == 86 then
+    if key == KEY_V then
         S.enabled = not S.enabled
         refresh()
-    elseif key == 66 then
+    elseif key == KEY_B then
         cycleDepth()
-    elseif key == 78 then
+    elseif key == KEY_N then
         cycleSpeed()
-    elseif key == 88 then
+    elseif key == KEY_X then
         S.unload()
+    end
+end)
+
+task.spawn(function()
+    local lastB = false
+    local lastN = false
+    local lastV = false
+    local lastX = false
+
+    while S.running do
+        local b = iskeypressed(KEY_B)
+        local n = iskeypressed(KEY_N)
+        local v = iskeypressed(KEY_V)
+        local x = iskeypressed(KEY_X)
+
+        if v and not lastV then
+            S.enabled = not S.enabled
+            refresh()
+        end
+
+        if b and not lastB then
+            cycleDepth()
+        end
+
+        if n and not lastN then
+            cycleSpeed()
+        end
+
+        if x and not lastX then
+            S.unload()
+            break
+        end
+
+        lastB = b
+        lastN = n
+        lastV = v
+        lastX = x
+
+        task.wait(0.04)
     end
 end)
 
@@ -165,4 +208,3 @@ task.spawn(function()
         end
     end
 end)
-
