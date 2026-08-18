@@ -1,2 +1,2 @@
-loadstring(game:HttpGet("https://raw.githubusercontent.com/YOUR_USERNAME/YOUR_REPOSITORY/main/BetterVoidGUI/main.lua"))()
+loadstring(game:HttpGet("https://raw.githubusercontent.com/https://github.com/Hungrychud/Bettervoid/main/BetterVoidGUI/main.lua"))()
 
