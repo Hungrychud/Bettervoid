@@ -1,4 +1,4 @@
-﻿local function boot()
+local function boot()
     local Players
     local lp
     local startedAt = tick()
