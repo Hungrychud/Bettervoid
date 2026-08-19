@@ -49,6 +49,12 @@ local function boot()
         "roam",
         "roamRadius",
         "roamSpeed",
+        "aimStabilizer",
+        "aimHoldTime",
+        "antiStick",
+        "avoidRadius",
+        "avoidShift",
+        "avoidHeightBoost",
         "showOverlay",
         "hasReturnMarker",
         "returnX",
@@ -66,6 +72,16 @@ local function boot()
         roam = false,
         roamRadius = 900,
         roamSpeed = 100000,
+        aimStabilizer = true,
+        aimHoldTime = 0.75,
+        aimHoldUntil = 0,
+        aimLockX = nil,
+        aimLockY = nil,
+        aimLockZ = nil,
+        antiStick = true,
+        avoidRadius = 180,
+        avoidShift = 2500,
+        avoidHeightBoost = 3500,
         showOverlay = true,
         hasReturnMarker = false,
         returnX = 0,
@@ -77,6 +93,8 @@ local function boot()
         currentX = 0,
         currentY = 0,
         currentZ = 0,
+        lastThreatName = "none",
+        lastThreatDistance = 0,
         lastMoveAt = 0
     }
 
@@ -128,6 +146,10 @@ local function boot()
         S.returnHeight = math.max(0, math.min(50, tonumber(S.returnHeight) or 3))
         S.roamRadius = math.max(100, math.min(5000, tonumber(S.roamRadius) or 900))
         S.roamSpeed = math.max(0.1, math.min(100000, tonumber(S.roamSpeed) or 100000))
+        S.aimHoldTime = math.max(0.05, math.min(3, tonumber(S.aimHoldTime) or 0.75))
+        S.avoidRadius = math.max(25, math.min(2000, tonumber(S.avoidRadius) or 180))
+        S.avoidShift = math.max(100, math.min(10000, tonumber(S.avoidShift) or 2500))
+        S.avoidHeightBoost = math.max(0, math.min(100000, tonumber(S.avoidHeightBoost) or 3500))
         S.returnX = tonumber(S.returnX) or 0
         S.returnY = tonumber(S.returnY) or 0
         S.returnZ = tonumber(S.returnZ) or 0
@@ -186,6 +208,64 @@ local function boot()
         return char and char:FindFirstChild("HumanoidRootPart")
     end
 
+    local function getCharacterRoot(char)
+        return char and (char:FindFirstChild("HumanoidRootPart") or char:FindFirstChild("UpperTorso") or char:FindFirstChild("Torso"))
+    end
+
+    local function getEvadeOffset(root)
+        if not S.antiStick or not root or not Players then
+            S.lastThreatName = "none"
+            S.lastThreatDistance = 0
+            return 0, 0, 0
+        end
+
+        local rootPos = root.Position
+        local bestName = nil
+        local bestDist = math.huge
+        local bestDx = 0
+        local bestDz = 0
+
+        for _, plr in ipairs(Players:GetPlayers()) do
+            if plr and plr.UserId ~= lp.UserId then
+                local targetRoot = getCharacterRoot(plr.Character)
+                if targetRoot then
+                    local pos = targetRoot.Position
+                    local dx = rootPos.X - pos.X
+                    local dz = rootPos.Z - pos.Z
+                    local dist = math.sqrt(dx * dx + dz * dz)
+                    if dist < bestDist then
+                        bestName = plr.Name
+                        bestDist = dist
+                        bestDx = dx
+                        bestDz = dz
+                    end
+                end
+            end
+        end
+
+        if not bestName or bestDist > S.avoidRadius then
+            S.lastThreatName = "none"
+            S.lastThreatDistance = bestDist == math.huge and 0 or bestDist
+            return 0, 0, 0
+        end
+
+        local mag = math.sqrt(bestDx * bestDx + bestDz * bestDz)
+        if mag < 1 then
+            local phase = tick() * 19.7
+            bestDx = math.cos(phase)
+            bestDz = math.sin(phase)
+            mag = 1
+        end
+
+        local jitter = tick() * 11.3
+        local sideX = math.cos(jitter) * S.avoidShift * 0.25
+        local sideZ = math.sin(jitter) * S.avoidShift * 0.25
+
+        S.lastThreatName = bestName
+        S.lastThreatDistance = bestDist
+        return (bestDx / mag) * S.avoidShift + sideX, (bestDz / mag) * S.avoidShift + sideZ, S.avoidHeightBoost
+    end
+
     local function syncUi()
         if handles.height and handles.height.Set then pcall(function() handles.height:Set(S.height) end) end
         if handles.rate and handles.rate.Set then pcall(function() handles.rate:Set(S.rate) end) end
@@ -193,6 +273,10 @@ local function boot()
         if handles.returnHeight and handles.returnHeight.Set then pcall(function() handles.returnHeight:Set(S.returnHeight) end) end
         if handles.roamRadius and handles.roamRadius.Set then pcall(function() handles.roamRadius:Set(S.roamRadius) end) end
         if handles.roamSpeed and handles.roamSpeed.Set then pcall(function() handles.roamSpeed:Set(S.roamSpeed) end) end
+        if handles.aimHoldTime and handles.aimHoldTime.Set then pcall(function() handles.aimHoldTime:Set(S.aimHoldTime) end) end
+        if handles.avoidRadius and handles.avoidRadius.Set then pcall(function() handles.avoidRadius:Set(S.avoidRadius) end) end
+        if handles.avoidShift and handles.avoidShift.Set then pcall(function() handles.avoidShift:Set(S.avoidShift) end) end
+        if handles.avoidHeightBoost and handles.avoidHeightBoost.Set then pcall(function() handles.avoidHeightBoost:Set(S.avoidHeightBoost) end) end
 
         if roamToggle and roamToggle.Set then pcall(function() roamToggle:Set(S.roam) end) end
         if overlayToggle and overlayToggle.Set then pcall(function() overlayToggle:Set(S.showOverlay) end) end
@@ -295,10 +379,10 @@ local function boot()
     end
 
     local PRESETS = {
-        ["Above map"] = { height = 100000, rate = 0.08, velocity = 1200, roam = false, roamRadius = 900, roamSpeed = 100000 },
-        ["Wide roam"] = { height = 100000, rate = 0.08, velocity = 1350, roam = true, roamRadius = 1400, roamSpeed = 100000 },
-        ["High sky"] = { height = 100000, rate = 0.06, velocity = 1800, roam = true, roamRadius = 1800, roamSpeed = 100000 },
-        ["Fast circle"] = { height = 100000, rate = 0.05, velocity = 1600, roam = true, roamRadius = 800, roamSpeed = 100000 }
+        ["Above map"] = { height = 100000, rate = 0.08, velocity = 1200, roam = false, roamRadius = 900, roamSpeed = 100000, aimStabilizer = true, aimHoldTime = 0.75, antiStick = true, avoidRadius = 180, avoidShift = 2500, avoidHeightBoost = 3500 },
+        ["Wide roam"] = { height = 100000, rate = 0.08, velocity = 1350, roam = true, roamRadius = 1400, roamSpeed = 100000, aimStabilizer = true, aimHoldTime = 0.75, antiStick = true, avoidRadius = 220, avoidShift = 3500, avoidHeightBoost = 5000 },
+        ["High sky"] = { height = 100000, rate = 0.06, velocity = 1800, roam = true, roamRadius = 1800, roamSpeed = 100000, aimStabilizer = true, aimHoldTime = 0.75, antiStick = true, avoidRadius = 260, avoidShift = 4500, avoidHeightBoost = 7500 },
+        ["Fast circle"] = { height = 100000, rate = 0.05, velocity = 1600, roam = true, roamRadius = 800, roamSpeed = 100000, aimStabilizer = true, aimHoldTime = 0.75, antiStick = true, avoidRadius = 200, avoidShift = 3000, avoidHeightBoost = 4000 }
     }
 
     local function applyPreset(name)
@@ -323,6 +407,16 @@ local function boot()
         notifyUser("Better Void", S.roam and "roam enabled" or "roam disabled", S.roam and "success" or "warning")
     end
     function S.toggleRoam() S.setRoam(not S.roam) end
+    function S.setAimStabilizer(on)
+        S.aimStabilizer = on and true or false
+        notifyUser("Better Void", S.aimStabilizer and "aim stabilizer enabled" or "aim stabilizer disabled", S.aimStabilizer and "success" or "warning")
+    end
+    function S.toggleAimStabilizer() S.setAimStabilizer(not S.aimStabilizer) end
+    function S.setAntiStick(on)
+        S.antiStick = on and true or false
+        notifyUser("Better Void", S.antiStick and "anti stick enabled" or "anti stick disabled", S.antiStick and "success" or "warning")
+    end
+    function S.toggleAntiStick() S.setAntiStick(not S.antiStick) end
     function S.panic() panic() end
     function S.saveReturnMarker() return saveReturnMarker() end
     function S.returnToMarker() return returnToMarker() end
@@ -361,7 +455,7 @@ local function boot()
             bg.Color = Color3.fromRGB(10, 10, 10)
             bg.Transparency = 0.72
             bg.Position = Vector2.new(12, 120)
-            bg.Size = Vector2.new(230, 108)
+            bg.Size = Vector2.new(260, 126)
             bg.Visible = false
 
             local text = Drawing.new("Text")
@@ -421,7 +515,7 @@ local function boot()
                         local x = pos and math.floor(pos.X) or 0
                         local y = pos and math.floor(pos.Y) or 0
                         local z = pos and math.floor(pos.Z) or 0
-                        text.Text = "Better Void\nVoid: " .. (S.enabled and "ON" or "OFF") .. "  Roam: " .. (S.roam and "ON" or "OFF") .. "\nXYZ: " .. x .. ", " .. y .. ", " .. z .. "\nMarker: " .. (S.hasReturnMarker and "saved" or "none")
+                        text.Text = "Better Void\nVoid: " .. (S.enabled and "ON" or "OFF") .. "  Roam: " .. (S.roam and "ON" or "OFF") .. "\nAnti stick: " .. (S.antiStick and "ON" or "OFF") .. "  Threat: " .. tostring(S.lastThreatName) .. "\nXYZ: " .. x .. ", " .. y .. ", " .. z .. "\nMarker: " .. (S.hasReturnMarker and "saved" or "none")
 
                         local dx = 0
                         local dz = 0
@@ -549,10 +643,33 @@ local function boot()
             S.roamRadius = math.floor(v)
         end)
         handles.roamSpeed = controls:Slider("Roam speed", S.roamSpeed, 1000, 0.1, 100000, "", function(v)
-            S.roamSpeed = math.max(0.1, v)
+            S.roamSpeed = math.max(0.1, math.min(100000, v))
         end)
+
+        controls:Divider("Shooting support")
+        controls:Toggle("Aim stabilizer", S.aimStabilizer, function(on)
+            S.aimStabilizer = on and true or false
+        end)
+        handles.aimHoldTime = controls:Slider("Aim hold time", S.aimHoldTime, 0.05, 0.05, 3, "s", function(v)
+            S.aimHoldTime = math.max(0.05, math.min(3, v))
+        end)
+
         overlayToggle = controls:Toggle("Position overlay", S.showOverlay, function(on)
             S.showOverlay = on and true or false
+        end)
+
+        controls:Divider("Anti stick")
+        controls:Toggle("Anti stick", S.antiStick, function(on)
+            S.antiStick = on and true or false
+        end)
+        handles.avoidRadius = controls:Slider("Avoid radius", S.avoidRadius, 25, 25, 2000, " studs", function(v)
+            S.avoidRadius = math.floor(v)
+        end)
+        handles.avoidShift = controls:Slider("Avoid shift", S.avoidShift, 100, 100, 10000, " studs", function(v)
+            S.avoidShift = math.floor(v)
+        end)
+        handles.avoidHeightBoost = controls:Slider("Avoid height boost", S.avoidHeightBoost, 100, 0, 100000, " studs", function(v)
+            S.avoidHeightBoost = math.floor(v)
         end)
 
         utilities:Divider("Presets")
@@ -584,12 +701,15 @@ local function boot()
         status:Label(function() return "Delay: " .. tostring(S.rate) .. "s" end)
         status:Label(function() return "Velocity: " .. tostring(S.velocity) end)
         status:Label(function() return "Roam radius: " .. tostring(S.roamRadius) end)
+        status:Label(function() return "Aim stabilizer: " .. (S.aimStabilizer and "ON" or "OFF") end)
+        status:Label(function() return "Anti stick: " .. (S.antiStick and "ON" or "OFF") end)
+        status:Label(function() return "Threat: " .. tostring(S.lastThreatName) .. " / " .. tostring(math.floor(S.lastThreatDistance or 0)) end)
         status:Label(function()
             local root = getRoot()
             return "Y position: " .. (root and tostring(math.floor(root.Position.Y)) or "none")
         end)
         status:Label(function() return "Marker: " .. (S.hasReturnMarker and "saved" or "none") end)
-        status:Info("P menu, V void, R roam, B panic, M/N marker, X unload.")
+        status:Info("P menu, V void, R roam, T aim stabilizer, G anti stick, B panic, M/N marker, X unload.")
 
         syncUi()
         notifyUser("Better Void", "INS-ui loaded. P opens menu, V toggles.", "success")
@@ -615,21 +735,48 @@ local function boot()
                         S.anchorZ = root.Position.Z
                     end
 
+                    local aiming = S.aimStabilizer and ((ismouse1pressed and ismouse1pressed()) or (ismouse2pressed and ismouse2pressed()))
+                    if aiming then
+                        S.aimHoldUntil = tick() + S.aimHoldTime
+                        if not S.aimLockX or not S.aimLockY or not S.aimLockZ then
+                            S.aimLockX = root.Position.X
+                            S.aimLockY = root.Position.Y
+                            S.aimLockZ = root.Position.Z
+                        end
+                    elseif tick() >= S.aimHoldUntil then
+                        S.aimLockX = nil
+                        S.aimLockY = nil
+                        S.aimLockZ = nil
+                    end
+
+                    local holdingAim = S.aimStabilizer and tick() < S.aimHoldUntil and S.aimLockX ~= nil and S.aimLockY ~= nil and S.aimLockZ ~= nil
                     local offsetX = 0
                     local offsetZ = 0
-                    if S.roam then
-                        local phase = tick() * S.roamSpeed
-                        offsetX = (math.cos(phase) * S.roamRadius) + (math.sin(phase * 1.7) * S.roamRadius * 0.35)
-                        offsetZ = (math.sin(phase) * S.roamRadius) + (math.cos(phase * 1.3) * S.roamRadius * 0.35)
+                    local evadeY = 0
+
+                    if holdingAim then
+                        S.lastThreatName = "aim hold"
+                        S.lastThreatDistance = 0
+                    else
+                        if S.roam then
+                            local phase = tick() * S.roamSpeed
+                            offsetX = (math.cos(phase) * S.roamRadius) + (math.sin(phase * 1.7) * S.roamRadius * 0.35)
+                            offsetZ = (math.sin(phase) * S.roamRadius) + (math.cos(phase * 1.3) * S.roamRadius * 0.35)
+                        end
+
+                        local evadeX, evadeZ, boostY = getEvadeOffset(root)
+                        offsetX = offsetX + evadeX
+                        offsetZ = offsetZ + evadeZ
+                        evadeY = boostY
                     end
 
                     pcall(function()
-                        local targetX = S.anchorX + offsetX
-                        local targetY = S.anchorY + S.height
-                        local targetZ = S.anchorZ + offsetZ
+                        local targetX = holdingAim and S.aimLockX or (S.anchorX + offsetX)
+                        local targetY = holdingAim and S.aimLockY or (S.anchorY + S.height + evadeY)
+                        local targetZ = holdingAim and S.aimLockZ or (S.anchorZ + offsetZ)
                         root.CFrame = CFrame.new(targetX, targetY, targetZ)
-                        root.AssemblyLinearVelocity = Vector3.new(0, S.velocity, 0)
-                        root.CanCollide = false
+                        root.AssemblyLinearVelocity = holdingAim and Vector3.new(0, 0, 0) or Vector3.new(0, S.velocity, 0)
+                        root.CanCollide = holdingAim or false
                         S.currentX = targetX
                         S.currentY = targetY
                         S.currentZ = targetZ
@@ -657,6 +804,8 @@ local function boot()
         while S.running do
             if (not hasUi) and pressed(118) then setEnabled(not S.enabled, true) end
             if pressed(114) then S.toggleRoam() end
+            if pressed(116) then S.toggleAimStabilizer() end
+            if pressed(103) then S.toggleAntiStick() end
             if pressed(98) then panic() end
             if pressed(109) then saveReturnMarker() end
             if pressed(110) then returnToMarker() end
