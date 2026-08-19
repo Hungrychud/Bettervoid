@@ -91,6 +91,7 @@ local function boot()
         armorCooldown = 8,
         armorTriggerRatio = 0.95,
         armorStatus = "idle",
+        armorSafeMode = true,
         hasReturnMarker = false,
         returnX = 0,
         returnY = 0,
@@ -295,6 +296,7 @@ local function boot()
         S.lastArmorBuyAt = tick()
         S.armorStatus = "buying"
 
+        local beforeArmor = armor
         local oldCFrame = root.CFrame
         local oldVelocity = root.AssemblyLinearVelocity
         pcall(function()
@@ -310,22 +312,30 @@ local function boot()
                 fireclickdetector(detector)
             end)
         end
-        if not clicked then
+        if not clicked and detector.FireServer then
             clicked = pcall(function()
                 detector:FireServer()
             end)
         end
+        if not clicked and detector.InvokeServer then
+            clicked = pcall(function()
+                detector:InvokeServer()
+            end)
+        end
 
-        task.wait(0.35)
+        task.wait(0.75)
+
+        local afterArmor = getArmorState()
+        local bought = afterArmor and beforeArmor and afterArmor > beforeArmor
 
         pcall(function()
             root.CFrame = oldCFrame
             root.AssemblyLinearVelocity = oldVelocity
         end)
 
-        S.armorStatus = clicked and item.Name or "click failed"
+        S.armorStatus = bought and (tostring(math.floor(afterArmor)) .. "/" .. tostring(math.floor(maxArmor))) or (clicked and "clicked, no armor" or "click failed")
         S.armorBuying = false
-        return clicked
+        return bought or clicked
     end
 
     local function getCharacterRoot(char)
@@ -952,7 +962,7 @@ local function boot()
         while S.running do
             if S.autoArmor then
                 buyArmor()
-                task.wait(1)
+                task.wait(math.max(3, S.armorCooldown or 8))
             else
                 task.wait(0.25)
             end
