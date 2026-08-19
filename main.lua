@@ -65,7 +65,7 @@ local function boot()
         returnHeight = 3,
         roam = false,
         roamRadius = 900,
-        roamSpeed = 0.8,
+        roamSpeed = 5000,
         showOverlay = true,
         hasReturnMarker = false,
         returnX = 0,
@@ -127,7 +127,7 @@ local function boot()
         S.velocity = math.max(500, math.min(5000, tonumber(S.velocity) or 1200))
         S.returnHeight = math.max(0, math.min(50, tonumber(S.returnHeight) or 3))
         S.roamRadius = math.max(100, math.min(5000, tonumber(S.roamRadius) or 900))
-        S.roamSpeed = math.max(0.1, math.min(5, tonumber(S.roamSpeed) or 0.8))
+        S.roamSpeed = math.max(0.1, math.min(5000, tonumber(S.roamSpeed) or 5000))
         S.returnX = tonumber(S.returnX) or 0
         S.returnY = tonumber(S.returnY) or 0
         S.returnZ = tonumber(S.returnZ) or 0
@@ -295,10 +295,10 @@ local function boot()
     end
 
     local PRESETS = {
-        ["Above map"] = { height = 650, rate = 0.08, velocity = 1200, roam = false, roamRadius = 900, roamSpeed = 0.8 },
-        ["Wide roam"] = { height = 900, rate = 0.08, velocity = 1350, roam = true, roamRadius = 1400, roamSpeed = 0.65 },
-        ["High sky"] = { height = 2500, rate = 0.06, velocity = 1800, roam = true, roamRadius = 1800, roamSpeed = 0.55 },
-        ["Fast circle"] = { height = 700, rate = 0.05, velocity = 1600, roam = true, roamRadius = 800, roamSpeed = 1.6 }
+        ["Above map"] = { height = 650, rate = 0.08, velocity = 1200, roam = false, roamRadius = 900, roamSpeed = 5000 },
+        ["Wide roam"] = { height = 900, rate = 0.08, velocity = 1350, roam = true, roamRadius = 1400, roamSpeed = 5000 },
+        ["High sky"] = { height = 2500, rate = 0.06, velocity = 1800, roam = true, roamRadius = 1800, roamSpeed = 5000 },
+        ["Fast circle"] = { height = 700, rate = 0.05, velocity = 1600, roam = true, roamRadius = 800, roamSpeed = 5000 }
     }
 
     local function applyPreset(name)
