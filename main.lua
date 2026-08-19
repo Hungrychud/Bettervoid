@@ -56,6 +56,9 @@
         "avoidShift",
         "avoidHeightBoost",
         "showOverlay",
+        "autoArmor",
+        "armorCooldown",
+        "armorTriggerRatio",
         "hasReturnMarker",
         "returnX",
         "returnY",
@@ -83,6 +86,11 @@
         avoidShift = 2500,
         avoidHeightBoost = 3500,
         showOverlay = true,
+        autoArmor = false,
+        armorBuying = false,
+        armorCooldown = 8,
+        armorTriggerRatio = 0.95,
+        armorStatus = "idle",
         hasReturnMarker = false,
         returnX = 0,
         returnY = 0,
@@ -105,6 +113,7 @@
     local toggle
     local roamToggle
     local overlayToggle
+    local autoArmorToggle
     local handles = {}
     local overlay = { items = {} }
     local syncingToggle = false
@@ -150,6 +159,8 @@
         S.avoidRadius = math.max(25, math.min(2000, tonumber(S.avoidRadius) or 180))
         S.avoidShift = math.max(100, math.min(10000, tonumber(S.avoidShift) or 2500))
         S.avoidHeightBoost = math.max(0, math.min(100000, tonumber(S.avoidHeightBoost) or 3500))
+        S.armorCooldown = math.max(2, math.min(60, tonumber(S.armorCooldown) or 8))
+        S.armorTriggerRatio = math.max(0.1, math.min(1, tonumber(S.armorTriggerRatio) or 0.95))
         S.returnX = tonumber(S.returnX) or 0
         S.returnY = tonumber(S.returnY) or 0
         S.returnZ = tonumber(S.returnZ) or 0
@@ -206,6 +217,115 @@
     local function getRoot()
         local char = lp and lp.Character
         return char and char:FindFirstChild("HumanoidRootPart")
+    end
+
+    local function getArmorState()
+        local char = lp and lp.Character
+        local effects = char and char:FindFirstChild("BodyEffects")
+        local armor = effects and effects:FindFirstChild("Armor")
+        local maxArmor = game:GetService("ReplicatedStorage"):FindFirstChild("MaxArmor")
+
+        if armor and maxArmor then
+            return tonumber(armor.Value) or 0, tonumber(maxArmor.Value) or 0
+        end
+
+        return nil, nil
+    end
+
+    local function findNearestArmorStand(root)
+        local ignored = workspace and workspace:FindFirstChild("Ignored")
+        local shop = ignored and ignored:FindFirstChild("Shop")
+        if not shop or not root then
+            return nil
+        end
+
+        local bestItem, bestHead, bestDetector, bestDistance
+        for _, item in ipairs(shop:GetChildren()) do
+            if item.Name and string.find(string.lower(item.Name), "full armor", 1, true) then
+                local head = item:FindFirstChild("Head")
+                local detector = item:FindFirstChildOfClass("ClickDetector")
+                if head and detector then
+                    local distance = (head.Position - root.Position).Magnitude
+                    if not bestDistance or distance < bestDistance then
+                        bestItem = item
+                        bestHead = head
+                        bestDetector = detector
+                        bestDistance = distance
+                    end
+                end
+            end
+        end
+
+        return bestItem, bestHead, bestDetector
+    end
+
+    local function buyArmor()
+        if S.armorBuying or not S.autoArmor or not S.running then
+            return false
+        end
+
+        local armor, maxArmor = getArmorState()
+        if not armor or not maxArmor or maxArmor <= 0 then
+            S.armorStatus = "armor stat missing"
+            return false
+        end
+
+        if armor >= maxArmor * S.armorTriggerRatio then
+            S.armorStatus = tostring(math.floor(armor)) .. "/" .. tostring(math.floor(maxArmor))
+            return false
+        end
+
+        if tick() - (S.lastArmorBuyAt or 0) < S.armorCooldown then
+            return false
+        end
+
+        local root = getRoot()
+        if not root then
+            S.armorStatus = "root missing"
+            return false
+        end
+
+        local item, head, detector = findNearestArmorStand(root)
+        if not item or not head or not detector then
+            S.armorStatus = "armor stand missing"
+            return false
+        end
+
+        S.armorBuying = true
+        S.lastArmorBuyAt = tick()
+        S.armorStatus = "buying"
+
+        local oldCFrame = root.CFrame
+        local oldVelocity = root.AssemblyLinearVelocity
+        pcall(function()
+            root.CFrame = CFrame.new(head.Position + Vector3.new(0, 3, 0))
+            root.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
+        end)
+
+        task.wait(0.2)
+
+        local clicked = false
+        if fireclickdetector then
+            clicked = pcall(function()
+                fireclickdetector(detector)
+            end)
+        end
+        if not clicked then
+            clicked = pcall(function()
+                detector:FireServer()
+            end)
+        end
+
+        task.wait(0.35)
+
+        pcall(function()
+            root.CFrame = oldCFrame
+            root.AssemblyLinearVelocity = oldVelocity
+        end)
+
+        S.armorStatus = clicked and item.Name or "click failed"
+        S.armorBuying = false
+        return clicked
     end
 
     local function getCharacterRoot(char)
@@ -277,9 +397,12 @@
         if handles.avoidRadius and handles.avoidRadius.Set then pcall(function() handles.avoidRadius:Set(S.avoidRadius) end) end
         if handles.avoidShift and handles.avoidShift.Set then pcall(function() handles.avoidShift:Set(S.avoidShift) end) end
         if handles.avoidHeightBoost and handles.avoidHeightBoost.Set then pcall(function() handles.avoidHeightBoost:Set(S.avoidHeightBoost) end) end
+        if handles.armorCooldown and handles.armorCooldown.Set then pcall(function() handles.armorCooldown:Set(S.armorCooldown) end) end
+        if handles.armorTriggerRatio and handles.armorTriggerRatio.Set then pcall(function() handles.armorTriggerRatio:Set(S.armorTriggerRatio) end) end
 
         if roamToggle and roamToggle.Set then pcall(function() roamToggle:Set(S.roam) end) end
         if overlayToggle and overlayToggle.Set then pcall(function() overlayToggle:Set(S.showOverlay) end) end
+        if autoArmorToggle and autoArmorToggle.Set then pcall(function() autoArmorToggle:Set(S.autoArmor) end) end
     end
 
     local function setEnabled(on, syncToggle)
@@ -417,6 +540,16 @@
         notifyUser("Better Void", S.antiStick and "anti stick enabled" or "anti stick disabled", S.antiStick and "success" or "warning")
     end
     function S.toggleAntiStick() S.setAntiStick(not S.antiStick) end
+    function S.setAutoArmor(on)
+        S.autoArmor = on and true or false
+        S.armorStatus = S.autoArmor and "watching" or "idle"
+        notifyUser("Auto armor", S.autoArmor and "enabled" or "disabled", S.autoArmor and "success" or "warning")
+    end
+    function S.toggleAutoArmor()
+        S.setAutoArmor(not S.autoArmor)
+        if autoArmorToggle and autoArmorToggle.Set then pcall(function() autoArmorToggle:Set(S.autoArmor) end) end
+    end
+    function S.buyArmor() return buyArmor() end
     function S.panic() panic() end
     function S.saveReturnMarker() return saveReturnMarker() end
     function S.returnToMarker() return returnToMarker() end
@@ -658,6 +791,24 @@
             S.showOverlay = on and true or false
         end)
 
+        controls:Divider("Armor")
+        autoArmorToggle = controls:Toggle("Auto buy armor", S.autoArmor, function(on)
+            S.setAutoArmor(on)
+        end)
+        handles.armorCooldown = controls:Slider("Armor cooldown", S.armorCooldown, 1, 2, 60, "s", function(v)
+            S.armorCooldown = math.floor(v)
+        end)
+        handles.armorTriggerRatio = controls:Slider("Buy below armor", S.armorTriggerRatio, 0.05, 0.1, 1, "", function(v)
+            S.armorTriggerRatio = math.max(0.1, math.min(1, v))
+        end)
+        controls:Button("Buy armor now", function()
+            local wasAuto = S.autoArmor
+            S.autoArmor = true
+            local ok = buyArmor()
+            S.autoArmor = wasAuto
+            notifyUser("Auto armor", ok and "buy attempted" or tostring(S.armorStatus), ok and "success" or "warning")
+        end)
+
         controls:Divider("Anti stick")
         controls:Toggle("Anti stick", S.antiStick, function(on)
             S.antiStick = on and true or false
@@ -703,13 +854,18 @@
         status:Label(function() return "Roam radius: " .. tostring(S.roamRadius) end)
         status:Label(function() return "Aim stabilizer: " .. (S.aimStabilizer and "ON" or "OFF") end)
         status:Label(function() return "Anti stick: " .. (S.antiStick and "ON" or "OFF") end)
+        status:Label(function() return "Auto armor: " .. (S.autoArmor and "ON" or "OFF") end)
+        status:Label(function()
+            local armor, maxArmor = getArmorState()
+            return "Armor: " .. (armor and (tostring(math.floor(armor)) .. "/" .. tostring(math.floor(maxArmor or 0))) or tostring(S.armorStatus))
+        end)
         status:Label(function() return "Threat: " .. tostring(S.lastThreatName) .. " / " .. tostring(math.floor(S.lastThreatDistance or 0)) end)
         status:Label(function()
             local root = getRoot()
             return "Y position: " .. (root and tostring(math.floor(root.Position.Y)) or "none")
         end)
         status:Label(function() return "Marker: " .. (S.hasReturnMarker and "saved" or "none") end)
-        status:Info("P menu, V void, R roam, T aim stabilizer, G anti stick, B panic, M/N marker, X unload.")
+        status:Info("P menu, V void, Y armor, R roam, T aim, G anti stick, B panic, M/N marker, X unload.")
 
         syncUi()
         notifyUser("Better Void", "INS-ui loaded. P opens menu, V toggles.", "success")
@@ -726,7 +882,7 @@
 
     task.spawn(function()
         while S.running do
-            if S.enabled then
+            if S.enabled and not S.armorBuying then
                 local root = getRoot()
                 if root then
                     if not S.anchorX or not S.anchorY or not S.anchorZ then
@@ -793,6 +949,17 @@
     end)
 
     task.spawn(function()
+        while S.running do
+            if S.autoArmor then
+                buyArmor()
+                task.wait(1)
+            else
+                task.wait(0.25)
+            end
+        end
+    end)
+
+    task.spawn(function()
         local keyState = {}
         local function pressed(code)
             local down = iskeypressed and iskeypressed(code)
@@ -806,6 +973,7 @@
             if pressed(114) then S.toggleRoam() end
             if pressed(116) then S.toggleAimStabilizer() end
             if pressed(103) then S.toggleAntiStick() end
+            if pressed(121) then S.toggleAutoArmor() end
             if pressed(98) then panic() end
             if pressed(109) then saveReturnMarker() end
             if pressed(110) then returnToMarker() end
