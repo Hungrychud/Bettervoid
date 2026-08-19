@@ -59,13 +59,13 @@ local function boot()
     local S = {
         enabled = false,
         running = true,
-        height = 650,
+        height = 100000,
         rate = 0.08,
         velocity = 1200,
         returnHeight = 3,
         roam = false,
         roamRadius = 900,
-        roamSpeed = 5000,
+        roamSpeed = 100000,
         showOverlay = true,
         hasReturnMarker = false,
         returnX = 0,
@@ -122,12 +122,12 @@ local function boot()
     end
 
     local function clampSettings()
-        S.height = math.max(100, math.min(10000, tonumber(S.height) or 650))
+        S.height = math.max(100, math.min(100000, tonumber(S.height) or 100000))
         S.rate = math.max(0.03, math.min(0.5, tonumber(S.rate) or 0.08))
         S.velocity = math.max(500, math.min(5000, tonumber(S.velocity) or 1200))
         S.returnHeight = math.max(0, math.min(50, tonumber(S.returnHeight) or 3))
         S.roamRadius = math.max(100, math.min(5000, tonumber(S.roamRadius) or 900))
-        S.roamSpeed = math.max(0.1, math.min(5000, tonumber(S.roamSpeed) or 5000))
+        S.roamSpeed = math.max(0.1, math.min(100000, tonumber(S.roamSpeed) or 100000))
         S.returnX = tonumber(S.returnX) or 0
         S.returnY = tonumber(S.returnY) or 0
         S.returnZ = tonumber(S.returnZ) or 0
@@ -295,10 +295,10 @@ local function boot()
     end
 
     local PRESETS = {
-        ["Above map"] = { height = 650, rate = 0.08, velocity = 1200, roam = false, roamRadius = 900, roamSpeed = 5000 },
-        ["Wide roam"] = { height = 900, rate = 0.08, velocity = 1350, roam = true, roamRadius = 1400, roamSpeed = 5000 },
-        ["High sky"] = { height = 2500, rate = 0.06, velocity = 1800, roam = true, roamRadius = 1800, roamSpeed = 5000 },
-        ["Fast circle"] = { height = 700, rate = 0.05, velocity = 1600, roam = true, roamRadius = 800, roamSpeed = 5000 }
+        ["Above map"] = { height = 100000, rate = 0.08, velocity = 1200, roam = false, roamRadius = 900, roamSpeed = 100000 },
+        ["Wide roam"] = { height = 100000, rate = 0.08, velocity = 1350, roam = true, roamRadius = 1400, roamSpeed = 100000 },
+        ["High sky"] = { height = 100000, rate = 0.06, velocity = 1800, roam = true, roamRadius = 1800, roamSpeed = 100000 },
+        ["Fast circle"] = { height = 100000, rate = 0.05, velocity = 1600, roam = true, roamRadius = 800, roamSpeed = 100000 }
     }
 
     local function applyPreset(name)
@@ -529,7 +529,7 @@ local function boot()
             toggle:AddKeybind("v", "Toggle")
         end
 
-        handles.height = controls:Slider("Height", S.height, 25, 100, 10000, " studs", function(v)
+        handles.height = controls:Slider("Height", S.height, 1000, 100, 100000, " studs", function(v)
             S.height = math.floor(v)
         end)
         handles.rate = controls:Slider("Tick delay", S.rate, 0.01, 0.03, 0.5, "s", function(v)
@@ -548,7 +548,7 @@ local function boot()
         handles.roamRadius = controls:Slider("Roam radius", S.roamRadius, 50, 100, 5000, " studs", function(v)
             S.roamRadius = math.floor(v)
         end)
-        handles.roamSpeed = controls:Slider("Roam speed", S.roamSpeed, 0.1, 0.1, 5000, "", function(v)
+        handles.roamSpeed = controls:Slider("Roam speed", S.roamSpeed, 1000, 0.1, 100000, "", function(v)
             S.roamSpeed = math.max(0.1, v)
         end)
         overlayToggle = controls:Toggle("Position overlay", S.showOverlay, function(on)
