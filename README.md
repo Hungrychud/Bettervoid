@@ -1,48 +1,35 @@
 # BetterVoidGUI
 
-Files:
+Void-only Better Void using INS-ui.
 
-- `main.lua` is the INS-ui styled GUI/client helper. In Matcha it skips INS-ui and runs headless with hotkeys plus Drawing overlays.
-- `loader.lua` is a standalone merged loader with embedded `main.lua`, recreated mon-2d routes for regular executors, and a Matcha-safe path.
+## Files
+
+- `main.lua` contains only the void loop plus INS-ui controls.
+- `loader.lua` loads `BetterVoid/main.lua` in Matcha, otherwise falls back to the GitHub raw `main.lua` URL.
 
 ## Controls
 
-- `P` opens and closes the INS-ui menu in regular executor UI mode; Matcha runs headless, so use the hotkeys below.
+- `P` opens and closes the INS-ui menu.
 - `V` toggles the void loop.
-- `Z` toggles Auto stomp by default; change it from the keybind control in the GUI.
-- `C` toggles Teleport stomp by default; change it from the keybind control in the GUI.
-- `J` manually stomps the best knocked target once.
-- `B` panic-disables active features.
-- `M` saves a return marker; `N` returns to it.
-- `1`, `2`, `3` load Slot1/Slot2/Slot3; `4`, `5`, `6` save Slot1/Slot2/Slot3.
-- `X` unloads the script and removes the GUI.
-- Use the GUI sliders and toggles to change height, tick delay, velocity, roam, target filters, aim correction, visuals, no reload, and stomp settings.
+- `X` unloads the script.
 
-## Notes
+## Matcha
 
-- This is a client-side script. Server-authoritative systems, such as damage validation, may ignore client-only rapid-fire attempts.
-- `No reload` keeps local supported weapon ammo topped up and clears the local reload flag. Server-side ammo validation may still apply.
-- `Aim corrector` improves the client-side rapid-fire ray by selecting a visible target inside the Aim FOV cone.
-- `FOV circle` and `Knocked ESP` use Drawing overlays and are removed on unload.
-- `Visual rapid fire` is off by default because it can show extra local shots without server damage registration.
-- `Auto stomp` uses the existing `MainGameEvent` stomp action and depends on what the live server accepts.
-
-## Presets
-
-- `Above map`: moderate height and safer default movement.
-- `High sky`: stronger vertical offset.
-- `Very high`: aggressive and more likely to trigger server correction.
-- `Anti snapback` briefly pulses faster if your character gets corrected near the surface, then stops the void loop if the server keeps snapping you back.
-
-## Loadstring
-
-`loader.lua` is now standalone and embeds the local `main.lua` content. Regenerate/update it after editing `main.lua`.
+Put `loader.lua` and `main.lua` in `C:\matcha\workspace\BetterVoid`, then run:
 
 ```lua
-loadstring(game:HttpGet("https://raw.githubusercontent.com/Hungrychud/Bettervoid/main/loader.lua"))()
+loadstring(readfile("BetterVoid/loader.lua"))()
 ```
 
-The UI library is loaded from:
+Console controls:
+
+```lua
+_G.BetterVoid.setEnabled(true)
+_G.BetterVoid.setEnabled(false)
+_G.BetterVoid.unload()
+```
+
+INS-ui source:
 
 ```lua
 https://raw.githubusercontent.com/neaxusxgod-png/INS-ui/main/uilib.min.lua
