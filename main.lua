@@ -286,58 +286,72 @@ local function boot()
             return false
         end
 
-        local item, head, detector = findNearestArmorStand(root)
-        if not item or not head or not detector then
+        local item, head = findNearestArmorStand(root)
+        if not item or not head then
             S.armorStatus = "armor stand missing"
             return false
         end
 
         S.armorBuying = true
         S.lastArmorBuyAt = tick()
-        S.armorStatus = "buying"
+        S.armorStatus = "click armor now"
 
         local beforeArmor = armor
         local oldCFrame = root.CFrame
         local oldVelocity = root.AssemblyLinearVelocity
+        local oldCanCollide = root.CanCollide
+        local camera = workspace.CurrentCamera
+        local oldCamera = camera and camera.CFrame
+
+        local offset = root.Position - head.Position
+        local flat = Vector3.new(offset.X, 0, offset.Z)
+        if flat.Magnitude < 1 then
+            flat = Vector3.new(0, 0, 1)
+        end
+        local standPos = head.Position + flat.Unit * 5 + Vector3.new(0, -2, 0)
+
         pcall(function()
-            root.CFrame = CFrame.new(head.Position + Vector3.new(0, 3, 0))
+            root.CFrame = CFrame.new(standPos, head.Position)
             root.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
+            root.CanCollide = true
+            if camera then
+                camera.CFrame = CFrame.lookAt(head.Position + flat.Unit * 9 + Vector3.new(0, 2, 0), head.Position)
+            end
         end)
 
-        task.wait(0.2)
-
-        local clicked = false
-        if fireclickdetector then
-            clicked = pcall(function()
-                fireclickdetector(detector)
-            end)
-        end
-        if not clicked and detector.FireServer then
-            clicked = pcall(function()
-                detector:FireServer()
-            end)
-        end
-        if not clicked and detector.InvokeServer then
-            clicked = pcall(function()
-                detector:InvokeServer()
-            end)
+        local bought = false
+        local deadline = tick() + 7
+        while S.running and S.autoArmor and tick() < deadline do
+            local afterArmor = getArmorState()
+            if afterArmor and beforeArmor and afterArmor > beforeArmor then
+                bought = true
+                S.armorStatus = tostring(math.floor(afterArmor)) .. "/" .. tostring(math.floor(maxArmor))
+                break
+            end
+            task.wait(0.15)
         end
 
-        task.wait(0.75)
+        root = getRoot()
+        if root then
+            pcall(function()
+                root.CFrame = oldCFrame
+                root.AssemblyLinearVelocity = oldVelocity
+                root.CanCollide = oldCanCollide
+            end)
+        end
+        if camera and oldCamera then
+            pcall(function()
+                camera.CFrame = oldCamera
+            end)
+        end
 
-        local afterArmor = getArmorState()
-        local bought = afterArmor and beforeArmor and afterArmor > beforeArmor
+        if not bought then
+            S.armorStatus = "manual click timeout"
+        end
 
-        pcall(function()
-            root.CFrame = oldCFrame
-            root.AssemblyLinearVelocity = oldVelocity
-        end)
-
-        S.armorStatus = bought and (tostring(math.floor(afterArmor)) .. "/" .. tostring(math.floor(maxArmor))) or (clicked and "clicked, no armor" or "click failed")
         S.armorBuying = false
-        return bought or clicked
+        return bought
     end
-
     local function getCharacterRoot(char)
         return char and (char:FindFirstChild("HumanoidRootPart") or char:FindFirstChild("UpperTorso") or char:FindFirstChild("Torso"))
     end
@@ -553,7 +567,7 @@ local function boot()
     function S.setAutoArmor(on)
         S.autoArmor = on and true or false
         S.armorStatus = S.autoArmor and "watching" or "idle"
-        notifyUser("Auto armor", S.autoArmor and "enabled" or "disabled", S.autoArmor and "success" or "warning")
+        notifyUser("Armor assist", S.autoArmor and "enabled" or "disabled", S.autoArmor and "success" or "warning")
     end
     function S.toggleAutoArmor()
         S.setAutoArmor(not S.autoArmor)
@@ -802,7 +816,7 @@ local function boot()
         end)
 
         controls:Divider("Armor")
-        autoArmorToggle = controls:Toggle("Auto buy armor", S.autoArmor, function(on)
+        autoArmorToggle = controls:Toggle("Auto armor assist", S.autoArmor, function(on)
             S.setAutoArmor(on)
         end)
         handles.armorCooldown = controls:Slider("Armor cooldown", S.armorCooldown, 1, 2, 60, "s", function(v)
@@ -811,12 +825,14 @@ local function boot()
         handles.armorTriggerRatio = controls:Slider("Buy below armor", S.armorTriggerRatio, 0.05, 0.1, 1, "", function(v)
             S.armorTriggerRatio = math.max(0.1, math.min(1, v))
         end)
-        controls:Button("Buy armor now", function()
-            local wasAuto = S.autoArmor
-            S.autoArmor = true
-            local ok = buyArmor()
-            S.autoArmor = wasAuto
-            notifyUser("Auto armor", ok and "buy attempted" or tostring(S.armorStatus), ok and "success" or "warning")
+        controls:Button("Armor assist now", function()
+            task.spawn(function()
+                local wasAuto = S.autoArmor
+                S.autoArmor = true
+                local ok = buyArmor()
+                S.autoArmor = wasAuto
+                notifyUser("Armor assist", ok and "armor bought" or tostring(S.armorStatus), ok and "success" or "warning")
+            end)
         end)
 
         controls:Divider("Anti stick")
@@ -864,7 +880,7 @@ local function boot()
         status:Label(function() return "Roam radius: " .. tostring(S.roamRadius) end)
         status:Label(function() return "Aim stabilizer: " .. (S.aimStabilizer and "ON" or "OFF") end)
         status:Label(function() return "Anti stick: " .. (S.antiStick and "ON" or "OFF") end)
-        status:Label(function() return "Auto armor: " .. (S.autoArmor and "ON" or "OFF") end)
+        status:Label(function() return "Armor assist: " .. (S.autoArmor and "ON" or "OFF") end)
         status:Label(function()
             local armor, maxArmor = getArmorState()
             return "Armor: " .. (armor and (tostring(math.floor(armor)) .. "/" .. tostring(math.floor(maxArmor or 0))) or tostring(S.armorStatus))
@@ -875,7 +891,7 @@ local function boot()
             return "Y position: " .. (root and tostring(math.floor(root.Position.Y)) or "none")
         end)
         status:Label(function() return "Marker: " .. (S.hasReturnMarker and "saved" or "none") end)
-        status:Info("P menu, V void, Y armor, R roam, T aim, G anti stick, B panic, M/N marker, X unload.")
+        status:Info("P menu, V void, Y armor assist, R roam, T aim, G anti stick, B panic, M/N marker, X unload.")
 
         syncUi()
         notifyUser("Better Void", "INS-ui loaded. P opens menu, V toggles.", "success")
