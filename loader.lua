@@ -463,7 +463,7 @@ local teleportStompToggle
 local notify
 local nativeNotify = getfenv and getfenv(1).notify or nil
 local visualConn
-local visuals = { fov = nil, pool = {}, targets = {} }
+local visuals = { fov = nil, status = nil, pool = {}, targets = {} }
 
 local function getRoot()
     local char = lp and lp.Character
@@ -987,6 +987,15 @@ local function manualStompOnce()
     return false
 end
 
+S.setEnabled = setEnabled
+S.stopVoid = stopVoid
+S.panic = panicAll
+S.stompOnce = manualStompOnce
+S.saveReturnMarker = saveReturnMarker
+S.returnToMarker = returnToMarker
+S.saveConfig = saveConfig
+S.loadConfig = loadConfig
+
 local win
 
 if Lib and Lib.CreateWindow then
@@ -1424,6 +1433,13 @@ function S.unload()
         visuals.fov = nil
     end
 
+    if visuals.status then
+        pcall(function()
+            visuals.status:Remove()
+        end)
+        visuals.status = nil
+    end
+
     for _, item in ipairs(visuals.pool) do
         pcall(function()
             if item.tag then item.tag:Remove() end
@@ -1465,6 +1481,17 @@ local function setupVisuals()
         visuals.fov.Filled = false
         visuals.fov.Transparency = 0.2
         visuals.fov.Visible = false
+
+        if MATCHA_RUNTIME then
+            visuals.status = Drawing.new("Text")
+            visuals.status.Size = 14
+            visuals.status.Center = false
+            visuals.status.Outline = true
+            visuals.status.Color = Color3.fromRGB(80, 170, 255)
+            visuals.status.Position = Vector2.new(12, 120)
+            visuals.status.Text = "Better Void loaded | V toggle | X unload"
+            visuals.status.Visible = true
+        end
 
         for i = 1, 16 do
             local tag = Drawing.new("Text")
@@ -1517,6 +1544,12 @@ local function setupVisuals()
         local camera = workspace.CurrentCamera
         local viewport = camera and camera.ViewportSize
         local center = viewport and Vector2.new(viewport.X * 0.5, viewport.Y * 0.5) or Vector2.new(0, 0)
+
+        if visuals.status then
+            visuals.status.Position = Vector2.new(12, 120)
+            visuals.status.Text = "Better Void | Void: " .. (S.enabled and "ON" or "OFF") .. " | Auto stomp: " .. (S.autoStomp and "ON" or "OFF") .. " | V/Z/C/J/B/X"
+            visuals.status.Visible = true
+        end
 
         if visuals.fov then
             if S.showFov and S.aimCorrector and viewport and camera then
