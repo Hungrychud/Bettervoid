@@ -233,35 +233,52 @@ local function boot()
         return nil, nil
     end
 
+    local ARMOR_FALLBACK_POSITIONS = {
+        Vector3.new(528, 50, -637)
+    }
+
+    local function useNearestPosition(root, currentItem, currentPosition, candidateItem, candidatePosition)
+        if not root or not candidatePosition then
+            return currentItem, currentPosition
+        end
+
+        if not currentPosition or (candidatePosition - root.Position).Magnitude < (currentPosition - root.Position).Magnitude then
+            return candidateItem, candidatePosition
+        end
+
+        return currentItem, currentPosition
+    end
+
     local function findNearestArmorStand(root)
-        local ignored = workspace and workspace:FindFirstChild("Ignored")
-        local shop = ignored and ignored:FindFirstChild("Shop")
-        if not shop or not root then
+        if not root then
             return nil
         end
 
-        local bestItem, bestHead, bestDetector, bestDistance
-        for _, item in ipairs(shop:GetChildren()) do
-            if item.Name and string.find(string.lower(item.Name), "full armor", 1, true) then
-                local head = item:FindFirstChild("Head")
-                local detector = item:FindFirstChildOfClass("ClickDetector")
-                if head and detector then
-                    local distance = (head.Position - root.Position).Magnitude
-                    if not bestDistance or distance < bestDistance then
-                        bestItem = item
-                        bestHead = head
-                        bestDetector = detector
-                        bestDistance = distance
+        local bestItem, bestPosition
+        local ignored = workspace and workspace:FindFirstChild("Ignored")
+        local shop = ignored and ignored:FindFirstChild("Shop")
+        if shop then
+            for _, item in ipairs(shop:GetChildren()) do
+                if item.Name and string.find(string.lower(item.Name), "full armor", 1, true) then
+                    local head = item:FindFirstChild("Head")
+                    local price = item:FindFirstChild("Price")
+                    local target = head or price
+                    if target then
+                        bestItem, bestPosition = useNearestPosition(root, bestItem, bestPosition, item, target.Position)
                     end
                 end
             end
         end
 
-        return bestItem, bestHead, bestDetector
+        for _, position in ipairs(ARMOR_FALLBACK_POSITIONS) do
+            bestItem, bestPosition = useNearestPosition(root, bestItem, bestPosition, "known armor stand", position)
+        end
+
+        return bestItem, bestPosition
     end
 
-    local function buyArmor()
-        if S.armorBuying or not S.autoArmor or not S.running then
+    local function buyArmor(force)
+        if S.armorBuying or (not force and not S.autoArmor) or not S.running then
             return false
         end
 
@@ -271,12 +288,12 @@ local function boot()
             return false
         end
 
-        if armor >= maxArmor * S.armorTriggerRatio then
+        if not force and armor >= maxArmor * S.armorTriggerRatio then
             S.armorStatus = tostring(math.floor(armor)) .. "/" .. tostring(math.floor(maxArmor))
             return false
         end
 
-        if tick() - (S.lastArmorBuyAt or 0) < S.armorCooldown then
+        if not force and tick() - (S.lastArmorBuyAt or 0) < S.armorCooldown then
             return false
         end
 
@@ -286,8 +303,8 @@ local function boot()
             return false
         end
 
-        local item, head = findNearestArmorStand(root)
-        if not item or not head then
+        local item, armorPosition = findNearestArmorStand(root)
+        if not item or not armorPosition then
             S.armorStatus = "armor stand missing"
             return false
         end
@@ -303,25 +320,31 @@ local function boot()
         local camera = workspace.CurrentCamera
         local oldCamera = camera and camera.CFrame
 
-        local offset = root.Position - head.Position
+        local offset = root.Position - armorPosition
         local flat = Vector3.new(offset.X, 0, offset.Z)
         if flat.Magnitude < 1 then
             flat = Vector3.new(0, 0, 1)
         end
-        local standPos = head.Position + flat.Unit * 5 + Vector3.new(0, -2, 0)
+        local side = flat.Unit * 5
+        local standPos = Vector3.new(armorPosition.X + side.X, armorPosition.Y, armorPosition.Z + side.Z)
 
         pcall(function()
-            root.CFrame = CFrame.new(standPos, head.Position)
+            local moved = pcall(function()
+                root.CFrame = CFrame.lookAt(standPos, armorPosition)
+            end)
+            if not moved then
+                root.Position = standPos
+            end
             root.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
             root.CanCollide = true
             if camera then
-                camera.CFrame = CFrame.lookAt(head.Position + flat.Unit * 9 + Vector3.new(0, 2, 0), head.Position)
+                camera.CFrame = CFrame.lookAt(armorPosition + flat.Unit * 9 + Vector3.new(0, 2, 0), armorPosition)
             end
         end)
 
         local bought = false
         local deadline = tick() + 7
-        while S.running and S.autoArmor and tick() < deadline do
+        while S.running and (force or S.autoArmor) and tick() < deadline do
             local afterArmor = getArmorState()
             if afterArmor and beforeArmor and afterArmor > beforeArmor then
                 bought = true
@@ -573,7 +596,7 @@ local function boot()
         S.setAutoArmor(not S.autoArmor)
         if autoArmorToggle and autoArmorToggle.Set then pcall(function() autoArmorToggle:Set(S.autoArmor) end) end
     end
-    function S.buyArmor() return buyArmor() end
+    function S.buyArmor() return buyArmor(true) end
     function S.panic() panic() end
     function S.saveReturnMarker() return saveReturnMarker() end
     function S.returnToMarker() return returnToMarker() end
@@ -829,7 +852,7 @@ local function boot()
             task.spawn(function()
                 local wasAuto = S.autoArmor
                 S.autoArmor = true
-                local ok = buyArmor()
+                local ok = buyArmor(true)
                 S.autoArmor = wasAuto
                 notifyUser("Armor assist", ok and "armor bought" or tostring(S.armorStatus), ok and "success" or "warning")
             end)
