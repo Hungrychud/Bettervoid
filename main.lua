@@ -59,6 +59,12 @@ local function boot()
         "autoArmor",
         "armorCooldown",
         "armorTriggerRatio",
+        "invincible",
+        "invincibleHealRatio",
+        "invincibleInterval",
+        "unshootable",
+        "unshootableHitboxSize",
+        "unshootableInterval",
         "hasReturnMarker",
         "returnX",
         "returnY",
@@ -92,6 +98,15 @@ local function boot()
         armorTriggerRatio = 0.95,
         armorStatus = "idle",
         armorSafeMode = true,
+        invincible = false,
+        invincibleHealRatio = 0.85,
+        invincibleInterval = 0.08,
+        invincibleStatus = "idle",
+        unshootable = false,
+        unshootableHitboxSize = 0.01,
+        unshootableInterval = 0.25,
+        unshootableStatus = "idle",
+        unshootableOriginal = {},
         hasReturnMarker = false,
         returnX = 0,
         returnY = 0,
@@ -115,6 +130,8 @@ local function boot()
     local roamToggle
     local overlayToggle
     local autoArmorToggle
+    local invincibleToggle
+    local unshootableToggle
     local handles = {}
     local overlay = { items = {} }
     local syncingToggle = false
@@ -162,6 +179,10 @@ local function boot()
         S.avoidHeightBoost = math.max(0, math.min(100000, tonumber(S.avoidHeightBoost) or 3500))
         S.armorCooldown = math.max(2, math.min(60, tonumber(S.armorCooldown) or 8))
         S.armorTriggerRatio = math.max(0.1, math.min(1, tonumber(S.armorTriggerRatio) or 0.95))
+        S.invincibleHealRatio = math.max(0.1, math.min(1, tonumber(S.invincibleHealRatio) or 0.85))
+        S.invincibleInterval = math.max(0.03, math.min(0.5, tonumber(S.invincibleInterval) or 0.08))
+        S.unshootableHitboxSize = math.max(0.01, math.min(0.5, tonumber(S.unshootableHitboxSize) or 0.01))
+        S.unshootableInterval = math.max(0.1, math.min(2, tonumber(S.unshootableInterval) or 0.25))
         S.returnX = tonumber(S.returnX) or 0
         S.returnY = tonumber(S.returnY) or 0
         S.returnZ = tonumber(S.returnZ) or 0
@@ -218,6 +239,177 @@ local function boot()
     local function getRoot()
         local char = lp and lp.Character
         return char and char:FindFirstChild("HumanoidRootPart")
+    end
+
+    local function getHumanoid()
+        local char = lp and lp.Character
+        if not char then
+            return nil
+        end
+
+        local hum = nil
+        pcall(function()
+            hum = char:FindFirstChildOfClass("Humanoid")
+        end)
+        return hum or char:FindFirstChild("Humanoid")
+    end
+
+    local function setValueObject(parent, name, value)
+        local item = parent and parent:FindFirstChild(name)
+        if item then
+            pcall(function()
+                item.Value = value
+            end)
+        end
+    end
+
+    local function applyInvinciblePulse()
+        local char = lp and lp.Character
+        local hum = getHumanoid()
+        if not char or not hum then
+            S.invincibleStatus = "character missing"
+            return false
+        end
+
+        local maxHealth = tonumber(hum.MaxHealth) or 100
+        if maxHealth < 100 then
+            pcall(function()
+                hum.MaxHealth = 100
+            end)
+            maxHealth = 100
+        end
+
+        local health = tonumber(hum.Health) or 0
+        if health <= 0 or health < maxHealth * S.invincibleHealRatio then
+            pcall(function()
+                hum.Health = maxHealth
+            end)
+        end
+
+        pcall(function()
+            hum.BreakJointsOnDeath = false
+        end)
+        pcall(function()
+            if Enum and Enum.HumanoidStateType and hum.SetStateEnabled then
+                hum:SetStateEnabled(Enum.HumanoidStateType.Dead, false)
+                hum:SetStateEnabled(Enum.HumanoidStateType.Ragdoll, false)
+                hum:SetStateEnabled(Enum.HumanoidStateType.FallingDown, false)
+            end
+        end)
+        pcall(function()
+            if Enum and Enum.HumanoidStateType and hum.ChangeState then
+                hum:ChangeState(Enum.HumanoidStateType.Running)
+            end
+        end)
+
+        local effects = char:FindFirstChild("BodyEffects")
+        if effects then
+            local maxArmor = game:GetService("ReplicatedStorage"):FindFirstChild("MaxArmor")
+            setValueObject(effects, "Defense", 100)
+            setValueObject(effects, "Armor", maxArmor and (tonumber(maxArmor.Value) or 200) or 200)
+            setValueObject(effects, "FireArmor", 100)
+            setValueObject(effects, "K.O", false)
+            setValueObject(effects, "KO", false)
+            setValueObject(effects, "Dead", false)
+            setValueObject(effects, "Grabbed", false)
+            setValueObject(effects, "Ragdolled", false)
+        end
+
+        S.invincibleStatus = tostring(math.floor(math.max(health, maxHealth))) .. "/" .. tostring(math.floor(maxHealth))
+        return true
+    end
+
+    local function isCachedForCharacter(char)
+        local first = S.unshootableOriginal and S.unshootableOriginal[1]
+        if not first or not first.part or not char then
+            return false
+        end
+
+        local ok, result = pcall(function()
+            return first.part:IsDescendantOf(char)
+        end)
+        return ok and result == true
+    end
+
+    local function cacheUnshootableParts(char, special)
+        S.unshootableOriginal = {}
+        if not char or not special then
+            return
+        end
+
+        for _, part in ipairs(special:GetChildren()) do
+            if part and (part.ClassName == "Part" or part.ClassName == "MeshPart") then
+                local ok, size, position, canCollide = pcall(function()
+                    return part.Size, part.Position, part.CanCollide
+                end)
+                if ok then
+                    S.unshootableOriginal[#S.unshootableOriginal + 1] = {
+                        part = part,
+                        size = size,
+                        position = position,
+                        canCollide = canCollide
+                    }
+                end
+            end
+        end
+    end
+
+    local function restoreUnshootableParts()
+        for _, saved in ipairs(S.unshootableOriginal or {}) do
+            local part = saved.part
+            if part then
+                pcall(function()
+                    part.Size = saved.size
+                    part.Position = saved.position
+                    part.CanCollide = saved.canCollide
+                end)
+            end
+        end
+        S.unshootableOriginal = {}
+        S.unshootableStatus = "idle"
+    end
+
+    local function applyUnshootablePulse()
+        local char = lp and lp.Character
+        local effects = char and char:FindFirstChild("BodyEffects")
+        local special = effects and effects:FindFirstChild("SpecialParts")
+        if not char or not special then
+            S.unshootableStatus = "hitboxes missing"
+            return false
+        end
+
+        if not isCachedForCharacter(char) then
+            cacheUnshootableParts(char, special)
+        end
+
+        local shrunk = 0
+        local hitboxSize = math.max(0.01, math.min(0.5, tonumber(S.unshootableHitboxSize) or 0.01))
+        for _, part in ipairs(special:GetChildren()) do
+            if part and (part.ClassName == "Part" or part.ClassName == "MeshPart") then
+                shrunk = shrunk + 1
+                pcall(function()
+                    part.Size = Vector3.new(hitboxSize, hitboxSize, hitboxSize)
+                    part.CanCollide = false
+                end)
+            end
+        end
+
+        if effects then
+            local maxArmor = game:GetService("ReplicatedStorage"):FindFirstChild("MaxArmor")
+            setValueObject(effects, "Defense", 100)
+            setValueObject(effects, "Armor", maxArmor and (tonumber(maxArmor.Value) or 200) or 200)
+            setValueObject(effects, "FireArmor", 100)
+            setValueObject(effects, "K.O", false)
+            setValueObject(effects, "KO", false)
+            setValueObject(effects, "Dead", false)
+        end
+
+        if S.invincible then
+            applyInvinciblePulse()
+        end
+
+        S.unshootableStatus = shrunk > 0 and ("shrunk " .. tostring(shrunk) .. " hitboxes") or "no hitboxes"
+        return shrunk > 0
     end
 
     local function getArmorState()
@@ -446,10 +638,16 @@ local function boot()
         if handles.avoidHeightBoost and handles.avoidHeightBoost.Set then pcall(function() handles.avoidHeightBoost:Set(S.avoidHeightBoost) end) end
         if handles.armorCooldown and handles.armorCooldown.Set then pcall(function() handles.armorCooldown:Set(S.armorCooldown) end) end
         if handles.armorTriggerRatio and handles.armorTriggerRatio.Set then pcall(function() handles.armorTriggerRatio:Set(S.armorTriggerRatio) end) end
+        if handles.invincibleHealRatio and handles.invincibleHealRatio.Set then pcall(function() handles.invincibleHealRatio:Set(S.invincibleHealRatio) end) end
+        if handles.invincibleInterval and handles.invincibleInterval.Set then pcall(function() handles.invincibleInterval:Set(S.invincibleInterval) end) end
+        if handles.unshootableHitboxSize and handles.unshootableHitboxSize.Set then pcall(function() handles.unshootableHitboxSize:Set(S.unshootableHitboxSize) end) end
+        if handles.unshootableInterval and handles.unshootableInterval.Set then pcall(function() handles.unshootableInterval:Set(S.unshootableInterval) end) end
 
         if roamToggle and roamToggle.Set then pcall(function() roamToggle:Set(S.roam) end) end
         if overlayToggle and overlayToggle.Set then pcall(function() overlayToggle:Set(S.showOverlay) end) end
         if autoArmorToggle and autoArmorToggle.Set then pcall(function() autoArmorToggle:Set(S.autoArmor) end) end
+        if invincibleToggle and invincibleToggle.Set then pcall(function() invincibleToggle:Set(S.invincible) end) end
+        if unshootableToggle and unshootableToggle.Set then pcall(function() unshootableToggle:Set(S.unshootable) end) end
     end
 
     local function setEnabled(on, syncToggle)
@@ -497,7 +695,12 @@ local function boot()
     local function panic()
         setEnabled(false, true)
         S.roam = false
+        S.invincible = false
+        S.unshootable = false
+        restoreUnshootableParts()
         if roamToggle and roamToggle.Set then pcall(function() roamToggle:Set(false) end) end
+        if invincibleToggle and invincibleToggle.Set then pcall(function() invincibleToggle:Set(false) end) end
+        if unshootableToggle and unshootableToggle.Set then pcall(function() unshootableToggle:Set(false) end) end
 
         local root = getRoot()
         if root then
@@ -595,6 +798,30 @@ local function boot()
     function S.toggleAutoArmor()
         S.setAutoArmor(not S.autoArmor)
         if autoArmorToggle and autoArmorToggle.Set then pcall(function() autoArmorToggle:Set(S.autoArmor) end) end
+    end
+    function S.setInvincible(on)
+        S.invincible = on and true or false
+        S.invincibleStatus = S.invincible and "guarding" or "idle"
+        notifyUser("Invincible", S.invincible and "enabled" or "disabled", S.invincible and "success" or "warning")
+    end
+    function S.toggleInvincible()
+        S.setInvincible(not S.invincible)
+        if invincibleToggle and invincibleToggle.Set then pcall(function() invincibleToggle:Set(S.invincible) end) end
+    end
+    function S.setUnshootable(on)
+        S.unshootable = on and true or false
+        if S.unshootable then
+            S.unshootableOriginal = {}
+            S.unshootableStatus = "arming"
+            applyUnshootablePulse()
+        else
+            restoreUnshootableParts()
+        end
+        notifyUser("Unshootable", S.unshootable and "enabled" or "disabled", S.unshootable and "success" or "warning")
+    end
+    function S.toggleUnshootable()
+        S.setUnshootable(not S.unshootable)
+        if unshootableToggle and unshootableToggle.Set then pcall(function() unshootableToggle:Set(S.unshootable) end) end
     end
     function S.buyArmor() return buyArmor(true) end
     function S.panic() panic() end
@@ -695,7 +922,7 @@ local function boot()
                         local x = pos and math.floor(pos.X) or 0
                         local y = pos and math.floor(pos.Y) or 0
                         local z = pos and math.floor(pos.Z) or 0
-                        text.Text = "Better Void\nVoid: " .. (S.enabled and "ON" or "OFF") .. "  Roam: " .. (S.roam and "ON" or "OFF") .. "\nAnti stick: " .. (S.antiStick and "ON" or "OFF") .. "  Threat: " .. tostring(S.lastThreatName) .. "\nXYZ: " .. x .. ", " .. y .. ", " .. z .. "\nMarker: " .. (S.hasReturnMarker and "saved" or "none")
+                        text.Text = "Better Void\nVoid: " .. (S.enabled and "ON" or "OFF") .. "  Roam: " .. (S.roam and "ON" or "OFF") .. "\nUnshootable: " .. (S.unshootable and "ON" or "OFF") .. "  Invincible: " .. (S.invincible and "ON" or "OFF") .. "\nAnti stick: " .. (S.antiStick and "ON" or "OFF") .. "  Threat: " .. tostring(S.lastThreatName) .. "\nXYZ: " .. x .. ", " .. y .. ", " .. z .. "\nMarker: " .. (S.hasReturnMarker and "saved" or "none")
 
                         local dx = 0
                         local dz = 0
@@ -718,6 +945,7 @@ local function boot()
 
     function S.unload()
         setEnabled(false, false)
+        restoreUnshootableParts()
         S.running = false
         removeOverlay()
 
@@ -858,6 +1086,34 @@ local function boot()
             end)
         end)
 
+        controls:Divider("Invincible")
+        invincibleToggle = controls:Toggle("Invincible", S.invincible, function(on)
+            S.setInvincible(on)
+        end)
+        if invincibleToggle and invincibleToggle.AddKeybind then
+            invincibleToggle:AddKeybind("h", "Toggle")
+        end
+        handles.invincibleHealRatio = controls:Slider("Heal below health", S.invincibleHealRatio, 0.05, 0.1, 1, "", function(v)
+            S.invincibleHealRatio = math.max(0.1, math.min(1, v))
+        end)
+        handles.invincibleInterval = controls:Slider("Guard tick delay", S.invincibleInterval, 0.01, 0.03, 0.5, "s", function(v)
+            S.invincibleInterval = math.max(0.03, math.min(0.5, v))
+        end)
+
+        controls:Divider("Unshootable")
+        unshootableToggle = controls:Toggle("Unshootable", S.unshootable, function(on)
+            S.setUnshootable(on)
+        end)
+        if unshootableToggle and unshootableToggle.AddKeybind then
+            unshootableToggle:AddKeybind("j", "Toggle")
+        end
+        handles.unshootableHitboxSize = controls:Slider("Hitbox size", S.unshootableHitboxSize, 0.01, 0.01, 0.5, "", function(v)
+            S.unshootableHitboxSize = math.max(0.01, math.min(0.5, v))
+        end)
+        handles.unshootableInterval = controls:Slider("Hitbox tick delay", S.unshootableInterval, 0.05, 0.1, 2, "s", function(v)
+            S.unshootableInterval = math.max(0.1, math.min(2, v))
+        end)
+
         controls:Divider("Anti stick")
         controls:Toggle("Anti stick", S.antiStick, function(on)
             S.antiStick = on and true or false
@@ -902,6 +1158,8 @@ local function boot()
         status:Label(function() return "Velocity: " .. tostring(S.velocity) end)
         status:Label(function() return "Roam radius: " .. tostring(S.roamRadius) end)
         status:Label(function() return "Aim stabilizer: " .. (S.aimStabilizer and "ON" or "OFF") end)
+        status:Label(function() return "Unshootable: " .. (S.unshootable and "ON" or "OFF") .. " / " .. tostring(S.unshootableStatus) end)
+        status:Label(function() return "Invincible: " .. (S.invincible and "ON" or "OFF") .. " / " .. tostring(S.invincibleStatus) end)
         status:Label(function() return "Anti stick: " .. (S.antiStick and "ON" or "OFF") end)
         status:Label(function() return "Armor assist: " .. (S.autoArmor and "ON" or "OFF") end)
         status:Label(function()
@@ -914,7 +1172,7 @@ local function boot()
             return "Y position: " .. (root and tostring(math.floor(root.Position.Y)) or "none")
         end)
         status:Label(function() return "Marker: " .. (S.hasReturnMarker and "saved" or "none") end)
-        status:Info("P menu, V void, Y armor assist, R roam, T aim, G anti stick, B panic, M/N marker, X unload.")
+        status:Info("P menu, V void, J unshootable, H invincible, Y armor assist, R roam, T aim, G anti stick, B panic, M/N marker, X unload.")
 
         syncUi()
         notifyUser("Better Void", "INS-ui loaded. P opens menu, V toggles.", "success")
@@ -1009,6 +1267,28 @@ local function boot()
     end)
 
     task.spawn(function()
+        while S.running do
+            if S.invincible then
+                applyInvinciblePulse()
+                task.wait(S.invincibleInterval)
+            else
+                task.wait(0.25)
+            end
+        end
+    end)
+
+    task.spawn(function()
+        while S.running do
+            if S.unshootable then
+                applyUnshootablePulse()
+                task.wait(S.unshootableInterval)
+            else
+                task.wait(0.25)
+            end
+        end
+    end)
+
+    task.spawn(function()
         local keyState = {}
         local function pressed(code)
             local down = iskeypressed and iskeypressed(code)
@@ -1023,6 +1303,8 @@ local function boot()
             if pressed(116) then S.toggleAimStabilizer() end
             if pressed(103) then S.toggleAntiStick() end
             if pressed(121) then S.toggleAutoArmor() end
+            if pressed(104) then S.toggleInvincible() end
+            if pressed(106) then S.toggleUnshootable() end
             if pressed(98) then panic() end
             if pressed(109) then saveReturnMarker() end
             if pressed(110) then returnToMarker() end
