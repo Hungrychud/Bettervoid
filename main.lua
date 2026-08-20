@@ -65,6 +65,7 @@ local function boot()
         "unshootable",
         "unshootableHitboxSize",
         "unshootableInterval",
+        "killAllCooldown",
         "hasReturnMarker",
         "returnX",
         "returnY",
@@ -107,6 +108,9 @@ local function boot()
         unshootableInterval = 0.25,
         unshootableStatus = "idle",
         unshootableOriginal = {},
+        killAllCooldown = 1.5,
+        killAllStatus = "idle",
+        lastKillAllAt = 0,
         hasReturnMarker = false,
         returnX = 0,
         returnY = 0,
@@ -183,6 +187,7 @@ local function boot()
         S.invincibleInterval = math.max(0.03, math.min(0.5, tonumber(S.invincibleInterval) or 0.08))
         S.unshootableHitboxSize = math.max(0.01, math.min(0.5, tonumber(S.unshootableHitboxSize) or 0.01))
         S.unshootableInterval = math.max(0.1, math.min(2, tonumber(S.unshootableInterval) or 0.25))
+        S.killAllCooldown = math.max(0.5, math.min(10, tonumber(S.killAllCooldown) or 1.5))
         S.returnX = tonumber(S.returnX) or 0
         S.returnY = tonumber(S.returnY) or 0
         S.returnZ = tonumber(S.returnZ) or 0
@@ -425,6 +430,359 @@ local function boot()
         return nil, nil
     end
 
+    local KILL_ALL_LOADOUT = {
+        "[Double-Barrel SG]",
+        "[Revolver]",
+        "[TacticalShotgun]",
+        "None"
+    }
+
+    local KILL_ALL_GUNS = {
+        ["[Double-Barrel SG]"] = true,
+        ["[Revolver]"] = true,
+        ["[TacticalShotgun]"] = true
+    }
+
+    local killAllRemote = nil
+    local loadoutRemote = nil
+    local refillActive = false
+
+    local function isRemoteEvent(object)
+        return object and object.ClassName == "RemoteEvent"
+    end
+
+    local function instanceKey(object)
+        if not object then
+            return "nil"
+        end
+
+        local ok, address = pcall(function()
+            return object.Address
+        end)
+        if ok and address then
+            return tostring(address)
+        end
+
+        local okName, fullName = pcall(function()
+            return object:GetFullName()
+        end)
+        return okName and fullName or tostring(object)
+    end
+
+    local function findKillRemote()
+        local storage = game:GetService("ReplicatedStorage")
+        local gameRemotes = storage and storage:FindFirstChild("GameRemotes")
+        local mainRemotes = storage and storage:FindFirstChild("MainRemotes")
+        local exact = (gameRemotes and gameRemotes:FindFirstChild("MainGameEvent")) or (mainRemotes and mainRemotes:FindFirstChild("MainRemoteEvent"))
+
+        if isRemoteEvent(exact) then
+            return exact
+        end
+
+        local fallback = nil
+        local ok, descendants = pcall(function()
+            return storage:GetDescendants()
+        end)
+        if not ok or not descendants then
+            return nil
+        end
+
+        for _, object in ipairs(descendants) do
+            if isRemoteEvent(object) then
+                fallback = fallback or object
+                local name = string.lower(object.Name or "")
+                if string.find(name, "main", 1, true) or string.find(name, "game", 1, true) or string.find(name, "settings", 1, true) then
+                    return object
+                end
+            end
+        end
+
+        return fallback
+    end
+
+    local function findLoadoutRemote()
+        local storage = game:GetService("ReplicatedStorage")
+        local exact = storage and storage:FindFirstChild("Loadout")
+        if isRemoteEvent(exact) then
+            return exact
+        end
+
+        local remotes = storage and storage:FindFirstChild("Remotes")
+        exact = remotes and remotes:FindFirstChild("Loadout")
+        if isRemoteEvent(exact) then
+            return exact
+        end
+
+        local ok, descendants = pcall(function()
+            return storage:GetDescendants()
+        end)
+        if not ok or not descendants then
+            return nil
+        end
+
+        for _, object in ipairs(descendants) do
+            if isRemoteEvent(object) and string.find(string.lower(object.Name or ""), "loadout", 1, true) then
+                return object
+            end
+        end
+
+        return nil
+    end
+
+    local function resolveKillAllRemotes()
+        if not isRemoteEvent(killAllRemote) then
+            killAllRemote = findKillRemote()
+        end
+        if not isRemoteEvent(loadoutRemote) then
+            loadoutRemote = findLoadoutRemote()
+        end
+        return killAllRemote, loadoutRemote
+    end
+
+    local function isFriendlyWhitelisted(player)
+        local environment = (getgenv and getgenv()) or _G
+        local loadedLibrary = environment and (environment.Library or _G.Library)
+
+        if loadedLibrary == nil or type(loadedLibrary.get_priority) ~= "function" then
+            return false
+        end
+
+        local success, priority = pcall(function()
+            return loadedLibrary.get_priority(player)
+        end)
+
+        return success and tostring(priority or ""):lower() == "friendly"
+    end
+
+    local function getGunContainers()
+        return lp and lp:FindFirstChild("Backpack"), lp and lp.Character
+    end
+
+    local function getTacticalShotgun(character, backpack)
+        return (backpack and backpack:FindFirstChild("[TacticalShotgun]")) or (character and character:FindFirstChild("[TacticalShotgun]"))
+    end
+
+    local function requestLoadout()
+        local _, remote = resolveKillAllRemotes()
+        if not remote then
+            S.killAllStatus = "loadout remote missing"
+            return false
+        end
+
+        local ok = pcall(function()
+            remote:FireServer(KILL_ALL_LOADOUT)
+        end)
+        S.killAllStatus = ok and "loadout requested" or "loadout failed"
+        return ok
+    end
+
+    local function requestAmmoRefill(tool, ammo)
+        local _, remote = resolveKillAllRemotes()
+        if not remote or refillActive or not tool or not ammo then
+            return false
+        end
+
+        local backpack, character = getGunContainers()
+        if not backpack then
+            S.killAllStatus = "backpack missing"
+            return false
+        end
+
+        pcall(function()
+            ammo:SetAttribute("ZeeKillRefillRequested", true)
+        end)
+
+        refillActive = true
+        local requestedName = tool.Name
+        local oldTools = {}
+        local equippedTools = {}
+
+        for _, container in ipairs({ backpack, character }) do
+            if container then
+                for _, item in ipairs(container:GetChildren()) do
+                    if item.ClassName == "Tool" and KILL_ALL_GUNS[item.Name] then
+                        oldTools[instanceKey(item)] = item
+                        if item.Parent == character then
+                            equippedTools[item.Name] = true
+                        end
+                    end
+                end
+            end
+        end
+
+        local ok = pcall(function()
+            remote:FireServer(KILL_ALL_LOADOUT)
+        end)
+        if not ok then
+            refillActive = false
+            S.killAllStatus = "refill failed"
+            return false
+        end
+
+        local newestTools = {}
+        local deadline = tick() + 2
+        while S.running and tick() < deadline do
+            for _, container in ipairs({ backpack, character }) do
+                if container then
+                    for _, item in ipairs(container:GetChildren()) do
+                        if item.ClassName == "Tool" and KILL_ALL_GUNS[item.Name] and not oldTools[instanceKey(item)] then
+                            newestTools[item.Name] = item
+                        end
+                    end
+                end
+            end
+
+            if next(newestTools) then
+                break
+            end
+
+            task.wait(0.05)
+        end
+
+        for name, item in pairs(newestTools) do
+            if equippedTools[name] and character and item.Parent then
+                pcall(function()
+                    item.Parent = character
+                end)
+            end
+        end
+
+        if not newestTools[requestedName] then
+            pcall(function()
+                ammo:SetAttribute("ZeeKillRefillRequested", nil)
+            end)
+        end
+
+        refillActive = false
+        S.killAllStatus = next(newestTools) and "ammo refilled" or "refill timeout"
+        return newestTools[requestedName] or false
+    end
+
+    local function usableAmmo(tool, ammo)
+        if not ammo then
+            return false
+        end
+
+        local value = tonumber(ammo.Value) or 0
+        if value <= 0 then
+            return requestAmmoRefill(tool, ammo) ~= false
+        end
+
+        return true
+    end
+
+    local function getKillTarget(player)
+        if not player or player == lp or isFriendlyWhitelisted(player) then
+            return nil, false
+        end
+
+        local character = player.Character
+        local humanoid = character and (character:FindFirstChild("Humanoid") or character:FindFirstChildOfClass("Humanoid"))
+        local bodyEffects = character and character:FindFirstChild("BodyEffects")
+        local knocked = bodyEffects and bodyEffects:FindFirstChild("K.O")
+        local valid = humanoid and tonumber(humanoid.Health) and humanoid.Health > 0 and not (knocked and knocked.Value)
+
+        return character, valid == true
+    end
+
+    local function killAll()
+        local now = tick()
+        if now - (S.lastKillAllAt or 0) < S.killAllCooldown then
+            S.killAllStatus = "cooldown"
+            return false
+        end
+
+        S.lastKillAllAt = now
+        local remote = resolveKillAllRemotes()
+        local backpack, character = getGunContainers()
+
+        if not remote then
+            S.killAllStatus = "kill remote missing"
+            return false
+        end
+
+        if not character or not backpack then
+            S.killAllStatus = "character missing"
+            return false
+        end
+
+        local tool = getTacticalShotgun(character, backpack)
+        if not tool then
+            requestLoadout()
+            S.killAllStatus = "tactical requested"
+            return false
+        end
+
+        local handle = tool:FindFirstChild("Handle")
+        local ammo = tool:FindFirstChild("Ammo")
+        if ammo and (tonumber(ammo.Value) or 0) <= 0 then
+            local refilledTool = requestAmmoRefill(tool, ammo)
+            if refilledTool then
+                tool = refilledTool
+                handle = tool:FindFirstChild("Handle")
+                ammo = tool:FindFirstChild("Ammo")
+            end
+        end
+
+        if not handle or not usableAmmo(tool, ammo) then
+            S.killAllStatus = not handle and "handle missing" or "ammo refill requested"
+            return false
+        end
+
+        local pellets = {}
+        for _, player in ipairs(Players:GetPlayers()) do
+            local targetCharacter, valid = getKillTarget(player)
+            local head = targetCharacter and targetCharacter:FindFirstChild("Head")
+            if valid and head then
+                local position = head.Position
+                for _ = 1, 20 do
+                    pellets[#pellets + 1] = {
+                        AimPosition = position,
+                        Result1 = position,
+                        Result2 = head,
+                        Result3 = Vector3.yAxis
+                    }
+                end
+            end
+        end
+
+        if #pellets == 0 then
+            S.killAllStatus = "no targets"
+            return false
+        end
+
+        local rangeObject = tool:FindFirstChild("Range")
+        local damageObject = tool:FindFirstChild("Damage")
+        local range = rangeObject and (tonumber(rangeObject.Value) or 200) or 200
+        local damage = damageObject and (tonumber(damageObject.Value) or 50) or 50
+        local wasEquipped = tool.Parent == character
+
+        if not wasEquipped then
+            pcall(function()
+                tool.Parent = character
+            end)
+        end
+
+        local fired = 0
+        for _ = 1, 8 do
+            local okFire = pcall(function()
+                remote:FireServer("ShootGun", handle, handle.Position, pellets, nil, nil, nil, range, damage)
+            end)
+            if okFire then
+                fired = fired + 1
+            end
+        end
+
+        if not wasEquipped and tool.Parent then
+            pcall(function()
+                tool.Parent = backpack
+            end)
+        end
+
+        S.killAllStatus = "fired " .. tostring(fired) .. "x / " .. tostring(#pellets) .. " pellets"
+        return fired > 0
+    end
+
     local ARMOR_FALLBACK_POSITIONS = {
         Vector3.new(528, 50, -637)
     }
@@ -642,6 +1000,7 @@ local function boot()
         if handles.invincibleInterval and handles.invincibleInterval.Set then pcall(function() handles.invincibleInterval:Set(S.invincibleInterval) end) end
         if handles.unshootableHitboxSize and handles.unshootableHitboxSize.Set then pcall(function() handles.unshootableHitboxSize:Set(S.unshootableHitboxSize) end) end
         if handles.unshootableInterval and handles.unshootableInterval.Set then pcall(function() handles.unshootableInterval:Set(S.unshootableInterval) end) end
+        if handles.killAllCooldown and handles.killAllCooldown.Set then pcall(function() handles.killAllCooldown:Set(S.killAllCooldown) end) end
 
         if roamToggle and roamToggle.Set then pcall(function() roamToggle:Set(S.roam) end) end
         if overlayToggle and overlayToggle.Set then pcall(function() overlayToggle:Set(S.showOverlay) end) end
@@ -823,6 +1182,7 @@ local function boot()
         S.setUnshootable(not S.unshootable)
         if unshootableToggle and unshootableToggle.Set then pcall(function() unshootableToggle:Set(S.unshootable) end) end
     end
+    function S.killAll() return killAll() end
     function S.buyArmor() return buyArmor(true) end
     function S.panic() panic() end
     function S.saveReturnMarker() return saveReturnMarker() end
@@ -1114,6 +1474,17 @@ local function boot()
             S.unshootableInterval = math.max(0.1, math.min(2, v))
         end)
 
+        controls:Divider("Offense")
+        handles.killAllCooldown = controls:Slider("Kill all cooldown", S.killAllCooldown, 0.5, 0.5, 10, "s", function(v)
+            S.killAllCooldown = math.max(0.5, math.min(10, v))
+        end)
+        controls:Button("Kill all now", function()
+            task.spawn(function()
+                local ok = killAll()
+                notifyUser("Kill all", tostring(S.killAllStatus), ok and "success" or "warning")
+            end)
+        end):SetRisk()
+
         controls:Divider("Anti stick")
         controls:Toggle("Anti stick", S.antiStick, function(on)
             S.antiStick = on and true or false
@@ -1160,6 +1531,7 @@ local function boot()
         status:Label(function() return "Aim stabilizer: " .. (S.aimStabilizer and "ON" or "OFF") end)
         status:Label(function() return "Unshootable: " .. (S.unshootable and "ON" or "OFF") .. " / " .. tostring(S.unshootableStatus) end)
         status:Label(function() return "Invincible: " .. (S.invincible and "ON" or "OFF") .. " / " .. tostring(S.invincibleStatus) end)
+        status:Label(function() return "Kill all: " .. tostring(S.killAllStatus) end)
         status:Label(function() return "Anti stick: " .. (S.antiStick and "ON" or "OFF") end)
         status:Label(function() return "Armor assist: " .. (S.autoArmor and "ON" or "OFF") end)
         status:Label(function()
@@ -1172,7 +1544,7 @@ local function boot()
             return "Y position: " .. (root and tostring(math.floor(root.Position.Y)) or "none")
         end)
         status:Label(function() return "Marker: " .. (S.hasReturnMarker and "saved" or "none") end)
-        status:Info("P menu, V void, J unshootable, H invincible, Y armor assist, R roam, T aim, G anti stick, B panic, M/N marker, X unload.")
+        status:Info("P menu, V void, J unshootable, H invincible, K kill all, Y armor assist, R roam, T aim, G anti stick, B panic, M/N marker, X unload.")
 
         syncUi()
         notifyUser("Better Void", "INS-ui loaded. P opens menu, V toggles.", "success")
@@ -1305,6 +1677,7 @@ local function boot()
             if pressed(121) then S.toggleAutoArmor() end
             if pressed(104) then S.toggleInvincible() end
             if pressed(106) then S.toggleUnshootable() end
+            if pressed(107) then task.spawn(function() S.killAll() end) end
             if pressed(98) then panic() end
             if pressed(109) then saveReturnMarker() end
             if pressed(110) then returnToMarker() end
