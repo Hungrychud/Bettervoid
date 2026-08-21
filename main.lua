@@ -51,20 +51,10 @@ local function boot()
         "roamSpeed",
         "aimStabilizer",
         "aimHoldTime",
-        "antiStick",
-        "avoidRadius",
-        "avoidShift",
-        "avoidHeightBoost",
         "showOverlay",
         "autoArmor",
         "armorCooldown",
         "armorTriggerRatio",
-        "invincible",
-        "invincibleHealRatio",
-        "invincibleInterval",
-        "unshootable",
-        "unshootableHitboxSize",
-        "unshootableInterval",
         "killAllCooldown",
         "hasReturnMarker",
         "returnX",
@@ -88,10 +78,6 @@ local function boot()
         aimLockX = nil,
         aimLockY = nil,
         aimLockZ = nil,
-        antiStick = true,
-        avoidRadius = 180,
-        avoidShift = 2500,
-        avoidHeightBoost = 3500,
         showOverlay = true,
         autoArmor = false,
         armorBuying = false,
@@ -99,17 +85,9 @@ local function boot()
         armorTriggerRatio = 0.95,
         armorStatus = "idle",
         armorSafeMode = true,
-        invincible = false,
-        invincibleHealRatio = 0.85,
-        invincibleInterval = 0.08,
-        invincibleStatus = "idle",
-        unshootable = false,
-        unshootableHitboxSize = 0.01,
-        unshootableInterval = 0.25,
-        unshootableStatus = "idle",
-        unshootableOriginal = {},
         killAllCooldown = 1.5,
         killAllStatus = "idle",
+        killInProgress = false,
         lastKillAllAt = 0,
         killTargetUserId = nil,
         killTargetName = "none",
@@ -137,8 +115,6 @@ local function boot()
     local roamToggle
     local overlayToggle
     local autoArmorToggle
-    local invincibleToggle
-    local unshootableToggle
     local handles = {}
     local overlay = { items = {} }
     local syncingToggle = false
@@ -181,15 +157,8 @@ local function boot()
         S.roamRadius = math.max(100, math.min(5000, tonumber(S.roamRadius) or 900))
         S.roamSpeed = math.max(0.1, math.min(100000, tonumber(S.roamSpeed) or 100000))
         S.aimHoldTime = math.max(0.05, math.min(3, tonumber(S.aimHoldTime) or 0.75))
-        S.avoidRadius = math.max(25, math.min(2000, tonumber(S.avoidRadius) or 180))
-        S.avoidShift = math.max(100, math.min(10000, tonumber(S.avoidShift) or 2500))
-        S.avoidHeightBoost = math.max(0, math.min(100000, tonumber(S.avoidHeightBoost) or 3500))
         S.armorCooldown = math.max(2, math.min(60, tonumber(S.armorCooldown) or 8))
         S.armorTriggerRatio = math.max(0.1, math.min(1, tonumber(S.armorTriggerRatio) or 0.95))
-        S.invincibleHealRatio = math.max(0.1, math.min(1, tonumber(S.invincibleHealRatio) or 0.85))
-        S.invincibleInterval = math.max(0.03, math.min(0.5, tonumber(S.invincibleInterval) or 0.08))
-        S.unshootableHitboxSize = math.max(0.01, math.min(0.5, tonumber(S.unshootableHitboxSize) or 0.01))
-        S.unshootableInterval = math.max(0.1, math.min(2, tonumber(S.unshootableInterval) or 0.25))
         S.killAllCooldown = math.max(0.5, math.min(10, tonumber(S.killAllCooldown) or 1.5))
         S.returnX = tonumber(S.returnX) or 0
         S.returnY = tonumber(S.returnY) or 0
@@ -262,164 +231,6 @@ local function boot()
         return hum or char:FindFirstChild("Humanoid")
     end
 
-    local function setValueObject(parent, name, value)
-        local item = parent and parent:FindFirstChild(name)
-        if item then
-            pcall(function()
-                item.Value = value
-            end)
-        end
-    end
-
-    local function applyInvinciblePulse()
-        local char = lp and lp.Character
-        local hum = getHumanoid()
-        if not char or not hum then
-            S.invincibleStatus = "character missing"
-            return false
-        end
-
-        local maxHealth = tonumber(hum.MaxHealth) or 100
-        if maxHealth < 100 then
-            pcall(function()
-                hum.MaxHealth = 100
-            end)
-            maxHealth = 100
-        end
-
-        local health = tonumber(hum.Health) or 0
-        if health <= 0 or health < maxHealth * S.invincibleHealRatio then
-            pcall(function()
-                hum.Health = maxHealth
-            end)
-        end
-
-        pcall(function()
-            hum.BreakJointsOnDeath = false
-        end)
-        pcall(function()
-            if Enum and Enum.HumanoidStateType and hum.SetStateEnabled then
-                hum:SetStateEnabled(Enum.HumanoidStateType.Dead, false)
-                hum:SetStateEnabled(Enum.HumanoidStateType.Ragdoll, false)
-                hum:SetStateEnabled(Enum.HumanoidStateType.FallingDown, false)
-            end
-        end)
-        pcall(function()
-            if Enum and Enum.HumanoidStateType and hum.ChangeState then
-                hum:ChangeState(Enum.HumanoidStateType.Running)
-            end
-        end)
-
-        local effects = char:FindFirstChild("BodyEffects")
-        if effects then
-            local maxArmor = game:GetService("ReplicatedStorage"):FindFirstChild("MaxArmor")
-            setValueObject(effects, "Defense", 100)
-            setValueObject(effects, "Armor", maxArmor and (tonumber(maxArmor.Value) or 200) or 200)
-            setValueObject(effects, "FireArmor", 100)
-            setValueObject(effects, "K.O", false)
-            setValueObject(effects, "KO", false)
-            setValueObject(effects, "Dead", false)
-            setValueObject(effects, "Grabbed", false)
-            setValueObject(effects, "Ragdolled", false)
-        end
-
-        S.invincibleStatus = tostring(math.floor(math.max(health, maxHealth))) .. "/" .. tostring(math.floor(maxHealth))
-        return true
-    end
-
-    local function isCachedForCharacter(char)
-        local first = S.unshootableOriginal and S.unshootableOriginal[1]
-        if not first or not first.part or not char then
-            return false
-        end
-
-        local ok, result = pcall(function()
-            return first.part:IsDescendantOf(char)
-        end)
-        return ok and result == true
-    end
-
-    local function cacheUnshootableParts(char, special)
-        S.unshootableOriginal = {}
-        if not char or not special then
-            return
-        end
-
-        for _, part in ipairs(special:GetChildren()) do
-            if part and (part.ClassName == "Part" or part.ClassName == "MeshPart") then
-                local ok, size, position, canCollide = pcall(function()
-                    return part.Size, part.Position, part.CanCollide
-                end)
-                if ok then
-                    S.unshootableOriginal[#S.unshootableOriginal + 1] = {
-                        part = part,
-                        size = size,
-                        position = position,
-                        canCollide = canCollide
-                    }
-                end
-            end
-        end
-    end
-
-    local function restoreUnshootableParts()
-        for _, saved in ipairs(S.unshootableOriginal or {}) do
-            local part = saved.part
-            if part then
-                pcall(function()
-                    part.Size = saved.size
-                    part.Position = saved.position
-                    part.CanCollide = saved.canCollide
-                end)
-            end
-        end
-        S.unshootableOriginal = {}
-        S.unshootableStatus = "idle"
-    end
-
-    local function applyUnshootablePulse()
-        local char = lp and lp.Character
-        local effects = char and char:FindFirstChild("BodyEffects")
-        local special = effects and effects:FindFirstChild("SpecialParts")
-        if not char or not special then
-            S.unshootableStatus = "hitboxes missing"
-            return false
-        end
-
-        if not isCachedForCharacter(char) then
-            cacheUnshootableParts(char, special)
-        end
-
-        local shrunk = 0
-        local hitboxSize = math.max(0.01, math.min(0.5, tonumber(S.unshootableHitboxSize) or 0.01))
-        for _, part in ipairs(special:GetChildren()) do
-            if part and (part.ClassName == "Part" or part.ClassName == "MeshPart") then
-                shrunk = shrunk + 1
-                pcall(function()
-                    part.Size = Vector3.new(hitboxSize, hitboxSize, hitboxSize)
-                    part.CanCollide = false
-                end)
-            end
-        end
-
-        if effects then
-            local maxArmor = game:GetService("ReplicatedStorage"):FindFirstChild("MaxArmor")
-            setValueObject(effects, "Defense", 100)
-            setValueObject(effects, "Armor", maxArmor and (tonumber(maxArmor.Value) or 200) or 200)
-            setValueObject(effects, "FireArmor", 100)
-            setValueObject(effects, "K.O", false)
-            setValueObject(effects, "KO", false)
-            setValueObject(effects, "Dead", false)
-        end
-
-        if S.invincible then
-            applyInvinciblePulse()
-        end
-
-        S.unshootableStatus = shrunk > 0 and ("shrunk " .. tostring(shrunk) .. " hitboxes") or "no hitboxes"
-        return shrunk > 0
-    end
-
     local function getArmorState()
         local char = lp and lp.Character
         local effects = char and char:FindFirstChild("BodyEffects")
@@ -445,6 +256,11 @@ local function boot()
         ["[Revolver]"] = true,
         ["[TacticalShotgun]"] = true
     }
+
+    local KILL_PELLETS_PER_TARGET = 6
+    local KILL_SHOT_BURST = 2
+    local KILL_SHOT_DELAY = 0.08
+    local KILL_EQUIP_DELAY = 0.08
 
     local killAllRemote = nil
     local loadoutRemote = nil
@@ -642,11 +458,20 @@ local function boot()
             task.wait(0.05)
         end
 
+        local humanoid = getHumanoid()
         for name, item in pairs(newestTools) do
             if equippedTools[name] and character and item.Parent then
-                pcall(function()
-                    item.Parent = character
-                end)
+                local equipped = false
+                if humanoid then
+                    equipped = pcall(function()
+                        humanoid:EquipTool(item)
+                    end)
+                end
+                if not equipped then
+                    pcall(function()
+                        item.Parent = character
+                    end)
+                end
             end
         end
 
@@ -811,6 +636,80 @@ local function boot()
         return setKillTarget(candidates[index])
     end
 
+    local function getEquippedTool(character)
+        if not character then
+            return nil
+        end
+
+        for _, item in ipairs(character:GetChildren()) do
+            if item.ClassName == "Tool" then
+                return item
+            end
+        end
+
+        return nil
+    end
+
+    local function equipKillTool(tool, character, humanoid)
+        if not tool or not character then
+            return false
+        end
+        if tool.Parent == character then
+            return true
+        end
+
+        local equipped = false
+        if humanoid then
+            equipped = pcall(function()
+                humanoid:EquipTool(tool)
+            end)
+        end
+        if not equipped then
+            equipped = pcall(function()
+                tool.Parent = character
+            end)
+        end
+
+        if equipped then
+            task.wait(KILL_EQUIP_DELAY)
+        end
+
+        return tool.Parent == character
+    end
+
+    local function restoreKillTool(tool, previousTool, character, backpack, wasEquipped)
+        if wasEquipped then
+            return
+        end
+
+        local humanoid = getHumanoid()
+        if previousTool and previousTool.Parent == character then
+            return
+        end
+        if previousTool and previousTool.Parent == backpack and humanoid then
+            local restored = pcall(function()
+                humanoid:EquipTool(previousTool)
+            end)
+            if restored then
+                task.wait(0.05)
+                return
+            end
+        end
+
+        if humanoid then
+            pcall(function()
+                humanoid:UnequipTools()
+            end)
+            task.wait(0.03)
+        end
+
+        if tool and backpack and tool.Parent == character then
+            pcall(function()
+                tool.Parent = backpack
+            end)
+        end
+    end
+
     local function buildKillPellets(targetPlayers)
         local pellets = {}
         local targetCount = 0
@@ -821,7 +720,7 @@ local function boot()
             if valid and head then
                 targetCount = targetCount + 1
                 local position = head.Position
-                for _ = 1, 20 do
+                for _ = 1, KILL_PELLETS_PER_TARGET do
                     pellets[#pellets + 1] = {
                         AimPosition = position,
                         Result1 = position,
@@ -835,7 +734,7 @@ local function boot()
         return pellets, targetCount
     end
 
-    local function killPlayers(targetPlayers, label)
+    local function runKillPlayers(targetPlayers, label)
         local now = tick()
         if now - (S.lastKillAllAt or 0) < S.killAllCooldown then
             S.killAllStatus = "cooldown"
@@ -891,31 +790,62 @@ local function boot()
         local range = rangeObject and (tonumber(rangeObject.Value) or 200) or 200
         local damage = damageObject and (tonumber(damageObject.Value) or 50) or 50
         local wasEquipped = tool.Parent == character
+        local previousTool = wasEquipped and nil or getEquippedTool(character)
+        local humanoid = getHumanoid()
 
-        if not wasEquipped then
-            pcall(function()
-                tool.Parent = character
-            end)
+        if not equipKillTool(tool, character, humanoid) then
+            S.killAllStatus = "equip failed"
+            return false
+        end
+
+        handle = tool:FindFirstChild("Handle")
+        if not handle then
+            restoreKillTool(tool, previousTool, character, backpack, wasEquipped)
+            S.killAllStatus = "handle missing"
+            return false
         end
 
         local fired = 0
-        for _ = 1, 8 do
+        for shot = 1, KILL_SHOT_BURST do
+            handle = tool:FindFirstChild("Handle")
+            if not handle then
+                break
+            end
             local okFire = pcall(function()
                 remote:FireServer("ShootGun", handle, handle.Position, pellets, nil, nil, nil, range, damage)
             end)
             if okFire then
                 fired = fired + 1
             end
+            if shot < KILL_SHOT_BURST then
+                task.wait(KILL_SHOT_DELAY)
+            end
         end
 
-        if not wasEquipped and tool.Parent then
-            pcall(function()
-                tool.Parent = backpack
-            end)
-        end
+        restoreKillTool(tool, previousTool, character, backpack, wasEquipped)
 
         S.killAllStatus = (label and (label .. ": ") or "") .. "fired " .. tostring(fired) .. "x / " .. tostring(targetCount) .. " target(s)"
         return fired > 0
+    end
+
+    local function killPlayers(targetPlayers, label)
+        if S.killInProgress then
+            S.killAllStatus = "already firing"
+            return false
+        end
+
+        S.killInProgress = true
+        local ok, result = pcall(function()
+            return runKillPlayers(targetPlayers, label)
+        end)
+        S.killInProgress = false
+
+        if not ok then
+            S.killAllStatus = "kill error"
+            return false
+        end
+
+        return result
     end
 
     local function killAll()
@@ -1085,64 +1015,6 @@ local function boot()
         S.armorBuying = false
         return bought
     end
-    local function getCharacterRoot(char)
-        return char and (char:FindFirstChild("HumanoidRootPart") or char:FindFirstChild("UpperTorso") or char:FindFirstChild("Torso"))
-    end
-
-    local function getEvadeOffset(root)
-        if not S.antiStick or not root or not Players then
-            S.lastThreatName = "none"
-            S.lastThreatDistance = 0
-            return 0, 0, 0
-        end
-
-        local rootPos = root.Position
-        local bestName = nil
-        local bestDist = math.huge
-        local bestDx = 0
-        local bestDz = 0
-
-        for _, plr in ipairs(Players:GetPlayers()) do
-            if plr and plr.UserId ~= lp.UserId then
-                local targetRoot = getCharacterRoot(plr.Character)
-                if targetRoot then
-                    local pos = targetRoot.Position
-                    local dx = rootPos.X - pos.X
-                    local dz = rootPos.Z - pos.Z
-                    local dist = math.sqrt(dx * dx + dz * dz)
-                    if dist < bestDist then
-                        bestName = plr.Name
-                        bestDist = dist
-                        bestDx = dx
-                        bestDz = dz
-                    end
-                end
-            end
-        end
-
-        if not bestName or bestDist > S.avoidRadius then
-            S.lastThreatName = "none"
-            S.lastThreatDistance = bestDist == math.huge and 0 or bestDist
-            return 0, 0, 0
-        end
-
-        local mag = math.sqrt(bestDx * bestDx + bestDz * bestDz)
-        if mag < 1 then
-            local phase = tick() * 19.7
-            bestDx = math.cos(phase)
-            bestDz = math.sin(phase)
-            mag = 1
-        end
-
-        local jitter = tick() * 11.3
-        local sideX = math.cos(jitter) * S.avoidShift * 0.25
-        local sideZ = math.sin(jitter) * S.avoidShift * 0.25
-
-        S.lastThreatName = bestName
-        S.lastThreatDistance = bestDist
-        return (bestDx / mag) * S.avoidShift + sideX, (bestDz / mag) * S.avoidShift + sideZ, S.avoidHeightBoost
-    end
-
     local function syncUi()
         if handles.height and handles.height.Set then pcall(function() handles.height:Set(S.height) end) end
         if handles.rate and handles.rate.Set then pcall(function() handles.rate:Set(S.rate) end) end
@@ -1151,23 +1023,14 @@ local function boot()
         if handles.roamRadius and handles.roamRadius.Set then pcall(function() handles.roamRadius:Set(S.roamRadius) end) end
         if handles.roamSpeed and handles.roamSpeed.Set then pcall(function() handles.roamSpeed:Set(S.roamSpeed) end) end
         if handles.aimHoldTime and handles.aimHoldTime.Set then pcall(function() handles.aimHoldTime:Set(S.aimHoldTime) end) end
-        if handles.avoidRadius and handles.avoidRadius.Set then pcall(function() handles.avoidRadius:Set(S.avoidRadius) end) end
-        if handles.avoidShift and handles.avoidShift.Set then pcall(function() handles.avoidShift:Set(S.avoidShift) end) end
-        if handles.avoidHeightBoost and handles.avoidHeightBoost.Set then pcall(function() handles.avoidHeightBoost:Set(S.avoidHeightBoost) end) end
         if handles.armorCooldown and handles.armorCooldown.Set then pcall(function() handles.armorCooldown:Set(S.armorCooldown) end) end
         if handles.armorTriggerRatio and handles.armorTriggerRatio.Set then pcall(function() handles.armorTriggerRatio:Set(S.armorTriggerRatio) end) end
-        if handles.invincibleHealRatio and handles.invincibleHealRatio.Set then pcall(function() handles.invincibleHealRatio:Set(S.invincibleHealRatio) end) end
-        if handles.invincibleInterval and handles.invincibleInterval.Set then pcall(function() handles.invincibleInterval:Set(S.invincibleInterval) end) end
-        if handles.unshootableHitboxSize and handles.unshootableHitboxSize.Set then pcall(function() handles.unshootableHitboxSize:Set(S.unshootableHitboxSize) end) end
-        if handles.unshootableInterval and handles.unshootableInterval.Set then pcall(function() handles.unshootableInterval:Set(S.unshootableInterval) end) end
         if handles.killAllCooldown and handles.killAllCooldown.Set then pcall(function() handles.killAllCooldown:Set(S.killAllCooldown) end) end
         if handles.killTargetName then pcall(function() handles.killTargetName.Value = S.killTargetInput or "" end) end
 
         if roamToggle and roamToggle.Set then pcall(function() roamToggle:Set(S.roam) end) end
         if overlayToggle and overlayToggle.Set then pcall(function() overlayToggle:Set(S.showOverlay) end) end
         if autoArmorToggle and autoArmorToggle.Set then pcall(function() autoArmorToggle:Set(S.autoArmor) end) end
-        if invincibleToggle and invincibleToggle.Set then pcall(function() invincibleToggle:Set(S.invincible) end) end
-        if unshootableToggle and unshootableToggle.Set then pcall(function() unshootableToggle:Set(S.unshootable) end) end
     end
 
     local function setEnabled(on, syncToggle)
@@ -1215,12 +1078,7 @@ local function boot()
     local function panic()
         setEnabled(false, true)
         S.roam = false
-        S.invincible = false
-        S.unshootable = false
-        restoreUnshootableParts()
         if roamToggle and roamToggle.Set then pcall(function() roamToggle:Set(false) end) end
-        if invincibleToggle and invincibleToggle.Set then pcall(function() invincibleToggle:Set(false) end) end
-        if unshootableToggle and unshootableToggle.Set then pcall(function() unshootableToggle:Set(false) end) end
 
         local root = getRoot()
         if root then
@@ -1272,10 +1130,10 @@ local function boot()
     end
 
     local PRESETS = {
-        ["Above map"] = { height = 100000, rate = 0.08, velocity = 1200, roam = false, roamRadius = 900, roamSpeed = 100000, aimStabilizer = true, aimHoldTime = 0.75, antiStick = true, avoidRadius = 180, avoidShift = 2500, avoidHeightBoost = 3500 },
-        ["Wide roam"] = { height = 100000, rate = 0.08, velocity = 1350, roam = true, roamRadius = 1400, roamSpeed = 100000, aimStabilizer = true, aimHoldTime = 0.75, antiStick = true, avoidRadius = 220, avoidShift = 3500, avoidHeightBoost = 5000 },
-        ["High sky"] = { height = 100000, rate = 0.06, velocity = 1800, roam = true, roamRadius = 1800, roamSpeed = 100000, aimStabilizer = true, aimHoldTime = 0.75, antiStick = true, avoidRadius = 260, avoidShift = 4500, avoidHeightBoost = 7500 },
-        ["Fast circle"] = { height = 100000, rate = 0.05, velocity = 1600, roam = true, roamRadius = 800, roamSpeed = 100000, aimStabilizer = true, aimHoldTime = 0.75, antiStick = true, avoidRadius = 200, avoidShift = 3000, avoidHeightBoost = 4000 }
+        ["Above map"] = { height = 100000, rate = 0.08, velocity = 1200, roam = false, roamRadius = 900, roamSpeed = 100000, aimStabilizer = true, aimHoldTime = 0.75 },
+        ["Wide roam"] = { height = 100000, rate = 0.08, velocity = 1350, roam = true, roamRadius = 1400, roamSpeed = 100000, aimStabilizer = true, aimHoldTime = 0.75 },
+        ["High sky"] = { height = 100000, rate = 0.06, velocity = 1800, roam = true, roamRadius = 1800, roamSpeed = 100000, aimStabilizer = true, aimHoldTime = 0.75 },
+        ["Fast circle"] = { height = 100000, rate = 0.05, velocity = 1600, roam = true, roamRadius = 800, roamSpeed = 100000, aimStabilizer = true, aimHoldTime = 0.75 }
     }
 
     local function applyPreset(name)
@@ -1305,11 +1163,6 @@ local function boot()
         notifyUser("Better Void", S.aimStabilizer and "aim stabilizer enabled" or "aim stabilizer disabled", S.aimStabilizer and "success" or "warning")
     end
     function S.toggleAimStabilizer() S.setAimStabilizer(not S.aimStabilizer) end
-    function S.setAntiStick(on)
-        S.antiStick = on and true or false
-        notifyUser("Better Void", S.antiStick and "anti stick enabled" or "anti stick disabled", S.antiStick and "success" or "warning")
-    end
-    function S.toggleAntiStick() S.setAntiStick(not S.antiStick) end
     function S.setAutoArmor(on)
         S.autoArmor = on and true or false
         S.armorStatus = S.autoArmor and "watching" or "idle"
@@ -1318,30 +1171,6 @@ local function boot()
     function S.toggleAutoArmor()
         S.setAutoArmor(not S.autoArmor)
         if autoArmorToggle and autoArmorToggle.Set then pcall(function() autoArmorToggle:Set(S.autoArmor) end) end
-    end
-    function S.setInvincible(on)
-        S.invincible = on and true or false
-        S.invincibleStatus = S.invincible and "guarding" or "idle"
-        notifyUser("Invincible", S.invincible and "enabled" or "disabled", S.invincible and "success" or "warning")
-    end
-    function S.toggleInvincible()
-        S.setInvincible(not S.invincible)
-        if invincibleToggle and invincibleToggle.Set then pcall(function() invincibleToggle:Set(S.invincible) end) end
-    end
-    function S.setUnshootable(on)
-        S.unshootable = on and true or false
-        if S.unshootable then
-            S.unshootableOriginal = {}
-            S.unshootableStatus = "arming"
-            applyUnshootablePulse()
-        else
-            restoreUnshootableParts()
-        end
-        notifyUser("Unshootable", S.unshootable and "enabled" or "disabled", S.unshootable and "success" or "warning")
-    end
-    function S.toggleUnshootable()
-        S.setUnshootable(not S.unshootable)
-        if unshootableToggle and unshootableToggle.Set then pcall(function() unshootableToggle:Set(S.unshootable) end) end
     end
     function S.killAll() return killAll() end
     function S.nextKillTarget() return selectNextKillTarget() end
@@ -1453,7 +1282,7 @@ local function boot()
                         local x = pos and math.floor(pos.X) or 0
                         local y = pos and math.floor(pos.Y) or 0
                         local z = pos and math.floor(pos.Z) or 0
-                        text.Text = "Better Void\nVoid: " .. (S.enabled and "ON" or "OFF") .. "  Roam: " .. (S.roam and "ON" or "OFF") .. "\nUnshootable: " .. (S.unshootable and "ON" or "OFF") .. "  Invincible: " .. (S.invincible and "ON" or "OFF") .. "\nAnti stick: " .. (S.antiStick and "ON" or "OFF") .. "  Threat: " .. tostring(S.lastThreatName) .. "\nXYZ: " .. x .. ", " .. y .. ", " .. z .. "\nMarker: " .. (S.hasReturnMarker and "saved" or "none")
+                        text.Text = "Better Void\nVoid: " .. (S.enabled and "ON" or "OFF") .. "  Roam: " .. (S.roam and "ON" or "OFF") .. "\nKill: " .. tostring(S.killAllStatus) .. "\nXYZ: " .. x .. ", " .. y .. ", " .. z .. "\nMarker: " .. (S.hasReturnMarker and "saved" or "none")
 
                         local dx = 0
                         local dz = 0
@@ -1476,7 +1305,6 @@ local function boot()
 
     function S.unload()
         setEnabled(false, false)
-        restoreUnshootableParts()
         S.running = false
         removeOverlay()
 
@@ -1619,35 +1447,6 @@ local function boot()
                 notifyUser("Armor assist", ok and "armor bought" or tostring(S.armorStatus), ok and "success" or "warning")
             end)
         end)
-
-        controls:Divider("Invincible")
-        invincibleToggle = controls:Toggle("Invincible", S.invincible, function(on)
-            S.setInvincible(on)
-        end)
-        if invincibleToggle and invincibleToggle.AddKeybind then
-            invincibleToggle:AddKeybind("h", "Toggle")
-        end
-        handles.invincibleHealRatio = controls:Slider("Heal below health", S.invincibleHealRatio, 0.05, 0.1, 1, "", function(v)
-            S.invincibleHealRatio = math.max(0.1, math.min(1, v))
-        end)
-        handles.invincibleInterval = controls:Slider("Guard tick delay", S.invincibleInterval, 0.01, 0.03, 0.5, "s", function(v)
-            S.invincibleInterval = math.max(0.03, math.min(0.5, v))
-        end)
-
-        controls:Divider("Unshootable")
-        unshootableToggle = controls:Toggle("Unshootable", S.unshootable, function(on)
-            S.setUnshootable(on)
-        end)
-        if unshootableToggle and unshootableToggle.AddKeybind then
-            unshootableToggle:AddKeybind("j", "Toggle")
-        end
-        handles.unshootableHitboxSize = controls:Slider("Hitbox size", S.unshootableHitboxSize, 0.01, 0.01, 0.5, "", function(v)
-            S.unshootableHitboxSize = math.max(0.01, math.min(0.5, v))
-        end)
-        handles.unshootableInterval = controls:Slider("Hitbox tick delay", S.unshootableInterval, 0.05, 0.1, 2, "s", function(v)
-            S.unshootableInterval = math.max(0.1, math.min(2, v))
-        end)
-
         killControls:Divider("Target")
         handles.killTargetName = killControls:Textbox("Target name", S.killTargetInput or "", function(value)
             local text = tostring(value or ""):match("^%s*(.-)%s*$")
@@ -1695,21 +1494,6 @@ local function boot()
                 notifyUser("Kill all", tostring(S.killAllStatus), ok and "success" or "warning")
             end)
         end):SetRisk()
-
-        controls:Divider("Anti stick")
-        controls:Toggle("Anti stick", S.antiStick, function(on)
-            S.antiStick = on and true or false
-        end)
-        handles.avoidRadius = controls:Slider("Avoid radius", S.avoidRadius, 25, 25, 2000, " studs", function(v)
-            S.avoidRadius = math.floor(v)
-        end)
-        handles.avoidShift = controls:Slider("Avoid shift", S.avoidShift, 100, 100, 10000, " studs", function(v)
-            S.avoidShift = math.floor(v)
-        end)
-        handles.avoidHeightBoost = controls:Slider("Avoid height boost", S.avoidHeightBoost, 100, 0, 100000, " studs", function(v)
-            S.avoidHeightBoost = math.floor(v)
-        end)
-
         utilities:Divider("Presets")
         utilities:Button("Above map", function() applyPreset("Above map") end)
         utilities:Button("Wide roam", function() applyPreset("Wide roam") end)
@@ -1740,23 +1524,19 @@ local function boot()
         status:Label(function() return "Velocity: " .. tostring(S.velocity) end)
         status:Label(function() return "Roam radius: " .. tostring(S.roamRadius) end)
         status:Label(function() return "Aim stabilizer: " .. (S.aimStabilizer and "ON" or "OFF") end)
-        status:Label(function() return "Unshootable: " .. (S.unshootable and "ON" or "OFF") .. " / " .. tostring(S.unshootableStatus) end)
-        status:Label(function() return "Invincible: " .. (S.invincible and "ON" or "OFF") .. " / " .. tostring(S.invincibleStatus) end)
         status:Label(function() return "Kill all: " .. tostring(S.killAllStatus) end)
         status:Label(function() return "Kill target: " .. tostring(S.killTargetName or "none") end)
-        status:Label(function() return "Anti stick: " .. (S.antiStick and "ON" or "OFF") end)
         status:Label(function() return "Armor assist: " .. (S.autoArmor and "ON" or "OFF") end)
         status:Label(function()
             local armor, maxArmor = getArmorState()
             return "Armor: " .. (armor and (tostring(math.floor(armor)) .. "/" .. tostring(math.floor(maxArmor or 0))) or tostring(S.armorStatus))
         end)
-        status:Label(function() return "Threat: " .. tostring(S.lastThreatName) .. " / " .. tostring(math.floor(S.lastThreatDistance or 0)) end)
         status:Label(function()
             local root = getRoot()
             return "Y position: " .. (root and tostring(math.floor(root.Position.Y)) or "none")
         end)
         status:Label(function() return "Marker: " .. (S.hasReturnMarker and "saved" or "none") end)
-        status:Info("P menu, V void, J unshootable, H invincible, K kill all, L selected kill, Y armor assist, R roam, T aim, G anti stick, B panic, M/N marker, X unload.")
+        status:Info("P menu, V void, K kill all, L selected kill, Y armor assist, R roam, T aim, B panic, M/N marker, X unload.")
         killStatus:Label(function() return "Target: " .. tostring(S.killTargetName or "none") end)
         killStatus:Label(function() return "Typed name: " .. tostring(S.killTargetInput or "") end)
         killStatus:Label(function() return "Status: " .. tostring(S.killAllStatus) end)
@@ -1803,7 +1583,6 @@ local function boot()
                     local holdingAim = S.aimStabilizer and tick() < S.aimHoldUntil and S.aimLockX ~= nil and S.aimLockY ~= nil and S.aimLockZ ~= nil
                     local offsetX = 0
                     local offsetZ = 0
-                    local evadeY = 0
 
                     if holdingAim then
                         S.lastThreatName = "aim hold"
@@ -1814,16 +1593,11 @@ local function boot()
                             offsetX = (math.cos(phase) * S.roamRadius) + (math.sin(phase * 1.7) * S.roamRadius * 0.35)
                             offsetZ = (math.sin(phase) * S.roamRadius) + (math.cos(phase * 1.3) * S.roamRadius * 0.35)
                         end
-
-                        local evadeX, evadeZ, boostY = getEvadeOffset(root)
-                        offsetX = offsetX + evadeX
-                        offsetZ = offsetZ + evadeZ
-                        evadeY = boostY
                     end
 
                     pcall(function()
                         local targetX = holdingAim and S.aimLockX or (S.anchorX + offsetX)
-                        local targetY = holdingAim and S.aimLockY or (S.anchorY + S.height + evadeY)
+                        local targetY = holdingAim and S.aimLockY or (S.anchorY + S.height)
                         local targetZ = holdingAim and S.aimLockZ or (S.anchorZ + offsetZ)
                         root.CFrame = CFrame.new(targetX, targetY, targetZ)
                         root.AssemblyLinearVelocity = holdingAim and Vector3.new(0, 0, 0) or Vector3.new(0, S.velocity, 0)
@@ -1855,28 +1629,6 @@ local function boot()
     end)
 
     task.spawn(function()
-        while S.running do
-            if S.invincible then
-                applyInvinciblePulse()
-                task.wait(S.invincibleInterval)
-            else
-                task.wait(0.25)
-            end
-        end
-    end)
-
-    task.spawn(function()
-        while S.running do
-            if S.unshootable then
-                applyUnshootablePulse()
-                task.wait(S.unshootableInterval)
-            else
-                task.wait(0.25)
-            end
-        end
-    end)
-
-    task.spawn(function()
         local keyState = {}
         local function pressed(code)
             local down = iskeypressed and iskeypressed(code)
@@ -1889,10 +1641,7 @@ local function boot()
             if (not hasUi) and pressed(118) then setEnabled(not S.enabled, true) end
             if pressed(114) then S.toggleRoam() end
             if pressed(116) then S.toggleAimStabilizer() end
-            if pressed(103) then S.toggleAntiStick() end
             if pressed(121) then S.toggleAutoArmor() end
-            if pressed(104) then S.toggleInvincible() end
-            if pressed(106) then S.toggleUnshootable() end
             if pressed(107) then task.spawn(function() S.killAll() end) end
             if pressed(108) then task.spawn(function() S.killSelectedTarget() end) end
             if pressed(98) then panic() end
