@@ -118,6 +118,7 @@ local function boot()
     local handles = {}
     local overlay = { items = {} }
     local syncingToggle = false
+    local scrollConnection = nil
 
     local function notifyUser(title, text, kind)
         if Lib and Lib.Notify then
@@ -261,10 +262,14 @@ local function boot()
     local KILL_SHOT_BURST = 2
     local KILL_SHOT_DELAY = 0.08
     local KILL_EQUIP_DELAY = 0.08
+    local KEY_KILL_ALL = 107
+    local KEY_KILL_SELECTED = 108
+    local SCROLL_TARGET_DELAY = 0.12
 
     local killAllRemote = nil
     local loadoutRemote = nil
     local refillActive = false
+    local lastTargetScrollAt = 0
 
     local function isRemoteEvent(object)
         return object and object.ClassName == "RemoteEvent"
@@ -600,10 +605,9 @@ local function boot()
         return findKillPlayerByName(selectedName)
     end
 
-    local function selectNextKillTarget()
+    local function getKillCandidates()
         if not Players then
-            S.killAllStatus = "players missing"
-            return false
+            return nil
         end
 
         local candidates = {}
@@ -611,6 +615,16 @@ local function boot()
             if not samePlayer(player, lp) and not isFriendlyWhitelisted(player) then
                 candidates[#candidates + 1] = player
             end
+        end
+
+        return candidates
+    end
+
+    local function selectKillTargetStep(step)
+        local candidates = getKillCandidates()
+        if not candidates then
+            S.killAllStatus = "players missing"
+            return false
         end
 
         if #candidates == 0 then
@@ -624,16 +638,41 @@ local function boot()
         if selectedUserId then
             for i, player in ipairs(candidates) do
                 if tonumber(player.UserId) == selectedUserId then
-                    index = i + 1
+                    index = i + (tonumber(step) or 1)
                     break
                 end
             end
         end
-        if index > #candidates then
-            index = 1
+
+        while index > #candidates do
+            index = index - #candidates
+        end
+        while index < 1 do
+            index = index + #candidates
         end
 
         return setKillTarget(candidates[index])
+    end
+
+    local function selectNextKillTarget()
+        return selectKillTargetStep(1)
+    end
+
+    local function selectPreviousKillTarget()
+        return selectKillTargetStep(-1)
+    end
+
+    local function scrollKillTarget(direction)
+        if tick() - lastTargetScrollAt < SCROLL_TARGET_DELAY then
+            return false
+        end
+
+        lastTargetScrollAt = tick()
+        if tonumber(direction) and tonumber(direction) < 0 then
+            return selectPreviousKillTarget()
+        end
+
+        return selectNextKillTarget()
     end
 
     local function getEquippedTool(character)
@@ -1174,6 +1213,7 @@ local function boot()
     end
     function S.killAll() return killAll() end
     function S.nextKillTarget() return selectNextKillTarget() end
+    function S.previousKillTarget() return selectPreviousKillTarget() end
     function S.clearKillTarget() return clearKillTarget() end
     function S.setKillTarget(target)
         if type(target) == "string" then
@@ -1308,6 +1348,13 @@ local function boot()
         S.running = false
         removeOverlay()
 
+        if scrollConnection then
+            pcall(function()
+                scrollConnection:Disconnect()
+            end)
+            scrollConnection = nil
+        end
+
         if win then
             pcall(function()
                 if win.Destroy then
@@ -1339,6 +1386,63 @@ local function boot()
 
         warn("Better Void: INS-ui failed to load: " .. tostring(result))
         return nil
+    end
+
+    local function setupKillTargetScroll()
+        if scrollConnection then
+            return true
+        end
+
+        local okService, userInput = pcall(function()
+            return game:GetService("UserInputService")
+        end)
+        if not okService or not userInput then
+            return false
+        end
+
+        local inputChanged
+        local okSignal = pcall(function()
+            inputChanged = userInput.InputChanged
+        end)
+        if not okSignal or not inputChanged or not inputChanged.Connect then
+            return false
+        end
+
+        local okConnect = pcall(function()
+            scrollConnection = inputChanged:Connect(function(input)
+                if not S.running then
+                    return
+                end
+
+                local isWheel = false
+                pcall(function()
+                    isWheel = Enum and Enum.UserInputType and input.UserInputType == Enum.UserInputType.MouseWheel
+                end)
+                if not isWheel then
+                    return
+                end
+
+                local wheel = 0
+                pcall(function()
+                    wheel = input.Position.Z
+                end)
+                if wheel == 0 then
+                    return
+                end
+
+                local okSelect = scrollKillTarget(wheel)
+                if okSelect then
+                    notifyUser("Kill target", tostring(S.killTargetName), "info")
+                end
+            end)
+        end)
+
+        if not okConnect then
+            scrollConnection = nil
+            return false
+        end
+
+        return true
     end
 
     local function createUi()
@@ -1469,12 +1573,16 @@ local function boot()
                 S.killAllStatus = "target typed"
             end
         end, "Exact or partial player name")
-        killControls:Button("Kill typed target", function()
+        killControls:Button("Kill selected target [L]", function()
             task.spawn(function()
                 local ok = killSelectedTarget()
                 notifyUser("Kill target", tostring(S.killAllStatus), ok and "success" or "warning")
             end)
         end):SetRisk()
+        killControls:Button("Previous kill target", function()
+            local ok = selectPreviousKillTarget()
+            notifyUser("Kill target", ok and tostring(S.killTargetName) or tostring(S.killAllStatus), ok and "success" or "warning")
+        end)
         killControls:Button("Next kill target", function()
             local ok = selectNextKillTarget()
             notifyUser("Kill target", ok and tostring(S.killTargetName) or tostring(S.killAllStatus), ok and "success" or "warning")
@@ -1488,7 +1596,7 @@ local function boot()
         handles.killAllCooldown = killControls:Slider("Kill cooldown", S.killAllCooldown, 0.5, 0.5, 10, "s", function(v)
             S.killAllCooldown = math.max(0.5, math.min(10, v))
         end)
-        killControls:Button("Kill all now", function()
+        killControls:Button("Kill all now [K]", function()
             task.spawn(function()
                 local ok = killAll()
                 notifyUser("Kill all", tostring(S.killAllStatus), ok and "success" or "warning")
@@ -1536,11 +1644,11 @@ local function boot()
             return "Y position: " .. (root and tostring(math.floor(root.Position.Y)) or "none")
         end)
         status:Label(function() return "Marker: " .. (S.hasReturnMarker and "saved" or "none") end)
-        status:Info("P menu, V void, K kill all, L selected kill, Y armor assist, R roam, T aim, B panic, M/N marker, X unload.")
+        status:Info("P menu, V void, K kill all, L selected kill, mouse wheel target, Y armor assist, R roam, T aim, B panic, M/N marker, X unload.")
         killStatus:Label(function() return "Target: " .. tostring(S.killTargetName or "none") end)
         killStatus:Label(function() return "Typed name: " .. tostring(S.killTargetInput or "") end)
         killStatus:Label(function() return "Status: " .. tostring(S.killAllStatus) end)
-        killStatus:Info("Type a full or partial player name, then use Kill typed target. K still kills all; L kills the selected target.")
+        killStatus:Info("Mouse wheel cycles targets. K kills all; L kills the selected target.")
 
         syncUi()
         notifyUser("Better Void", "INS-ui loaded. P opens menu, V toggles.", "success")
@@ -1550,6 +1658,7 @@ local function boot()
     clampSettings()
     setupOverlay()
     local hasUi = createUi()
+    setupKillTargetScroll()
 
     if loadedConfig then
         notifyUser("Config", "loaded", "success")
@@ -1642,8 +1751,8 @@ local function boot()
             if pressed(114) then S.toggleRoam() end
             if pressed(116) then S.toggleAimStabilizer() end
             if pressed(121) then S.toggleAutoArmor() end
-            if pressed(107) then task.spawn(function() S.killAll() end) end
-            if pressed(108) then task.spawn(function() S.killSelectedTarget() end) end
+            if pressed(KEY_KILL_ALL) then task.spawn(function() S.killAll() end) end
+            if pressed(KEY_KILL_SELECTED) then task.spawn(function() S.killSelectedTarget() end) end
             if pressed(98) then panic() end
             if pressed(109) then saveReturnMarker() end
             if pressed(110) then returnToMarker() end
