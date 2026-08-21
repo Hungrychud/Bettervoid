@@ -119,6 +119,12 @@ local function boot()
     local overlay = { items = {} }
     local syncingToggle = false
     local scrollConnection = nil
+    local hotkeyConnection = nil
+    local peopleFinderGui = nil
+    local peopleFinderSearch = nil
+    local peopleFinderList = nil
+    local openPeopleFinder
+    local destroyPeopleFinder
 
     local function notifyUser(title, text, kind)
         if Lib and Lib.Notify then
@@ -1214,6 +1220,7 @@ local function boot()
     function S.killAll() return killAll() end
     function S.nextKillTarget() return selectNextKillTarget() end
     function S.previousKillTarget() return selectPreviousKillTarget() end
+    function S.openPeopleFinder() return openPeopleFinder() end
     function S.clearKillTarget() return clearKillTarget() end
     function S.setKillTarget(target)
         if type(target) == "string" then
@@ -1354,6 +1361,13 @@ local function boot()
             end)
             scrollConnection = nil
         end
+        if hotkeyConnection then
+            pcall(function()
+                hotkeyConnection:Disconnect()
+            end)
+            hotkeyConnection = nil
+        end
+        destroyPeopleFinder()
 
         if win then
             pcall(function()
@@ -1442,6 +1456,308 @@ local function boot()
             return false
         end
 
+        return true
+    end
+
+    local function keyMatches(input, keyName, fallbackCode)
+        if not input then
+            return false
+        end
+
+        local keyCode = nil
+        pcall(function()
+            keyCode = input.KeyCode
+        end)
+        if not keyCode then
+            return false
+        end
+
+        local enumKey = nil
+        pcall(function()
+            enumKey = Enum and Enum.KeyCode and Enum.KeyCode[keyName]
+        end)
+        if enumKey and keyCode == enumKey then
+            return true
+        end
+
+        local numeric = tonumber(keyCode)
+        if numeric and numeric == fallbackCode then
+            return true
+        end
+
+        local value = nil
+        pcall(function()
+            value = keyCode.Value
+        end)
+        if tonumber(value) == fallbackCode then
+            return true
+        end
+
+        local text = string.lower(tostring(keyCode))
+        local wanted = string.lower(tostring(keyName))
+        return text == wanted or string.sub(text, -#wanted) == wanted
+    end
+
+    local function textBoxFocused(userInput)
+        local focused = nil
+        pcall(function()
+            if userInput and userInput.GetFocusedTextBox then
+                focused = userInput:GetFocusedTextBox()
+            end
+        end)
+        return focused ~= nil
+    end
+
+    local function setupHotkeys()
+        if hotkeyConnection then
+            return true
+        end
+
+        local okService, userInput = pcall(function()
+            return game:GetService("UserInputService")
+        end)
+        if not okService or not userInput then
+            return false
+        end
+
+        local inputBegan
+        local okSignal = pcall(function()
+            inputBegan = userInput.InputBegan
+        end)
+        if not okSignal or not inputBegan or not inputBegan.Connect then
+            return false
+        end
+
+        local okConnect = pcall(function()
+            hotkeyConnection = inputBegan:Connect(function(input)
+                if not S.running or textBoxFocused(userInput) then
+                    return
+                end
+
+                if keyMatches(input, "V", 118) then
+                    setEnabled(not S.enabled, true)
+                elseif keyMatches(input, "R", 114) then
+                    S.toggleRoam()
+                elseif keyMatches(input, "T", 116) then
+                    S.toggleAimStabilizer()
+                elseif keyMatches(input, "Y", 121) then
+                    S.toggleAutoArmor()
+                elseif keyMatches(input, "K", KEY_KILL_ALL) then
+                    task.spawn(function() S.killAll() end)
+                elseif keyMatches(input, "L", KEY_KILL_SELECTED) then
+                    task.spawn(function() S.killSelectedTarget() end)
+                elseif keyMatches(input, "B", 98) then
+                    panic()
+                elseif keyMatches(input, "M", 109) then
+                    saveReturnMarker()
+                elseif keyMatches(input, "N", 110) then
+                    returnToMarker()
+                elseif keyMatches(input, "X", 120) then
+                    S.unload()
+                end
+            end)
+        end)
+
+        if not okConnect then
+            hotkeyConnection = nil
+            return false
+        end
+
+        return true
+    end
+
+    function destroyPeopleFinder()
+        if peopleFinderGui then
+            pcall(function()
+                peopleFinderGui:Destroy()
+            end)
+        end
+        peopleFinderGui = nil
+        peopleFinderSearch = nil
+        peopleFinderList = nil
+    end
+
+    local function peopleFinderParent()
+        local parent = nil
+        pcall(function()
+            parent = game:GetService("CoreGui")
+        end)
+        if parent then
+            return parent
+        end
+
+        pcall(function()
+            parent = lp and lp:FindFirstChildOfClass("PlayerGui")
+        end)
+        return parent
+    end
+
+    local function rebuildPeopleFinderList()
+        if not peopleFinderList or not Players then
+            return
+        end
+
+        for _, child in ipairs(peopleFinderList:GetChildren()) do
+            if child.ClassName ~= "UIListLayout" then
+                pcall(function()
+                    child:Destroy()
+                end)
+            end
+        end
+
+        local query = ""
+        pcall(function()
+            query = string.lower(tostring(peopleFinderSearch.Text or ""))
+        end)
+
+        local shown = 0
+        for _, player in ipairs(Players:GetPlayers()) do
+            if not samePlayer(player, lp) then
+                local displayName = ""
+                pcall(function()
+                    displayName = tostring(player.DisplayName or "")
+                end)
+                local name = tostring(player.Name or "")
+                local label = name
+                if displayName ~= "" and displayName ~= name then
+                    label = name .. "  (" .. displayName .. ")"
+                end
+
+                local haystack = string.lower(label)
+                if query == "" or string.find(haystack, query, 1, true) then
+                    shown = shown + 1
+                    local targetPlayer = player
+                    local button = Instance.new("TextButton")
+                    button.Name = "Player_" .. tostring(shown)
+                    button.BackgroundColor3 = Color3.fromRGB(31, 38, 50)
+                    button.BorderSizePixel = 0
+                    button.Size = UDim2.new(1, -8, 0, 30)
+                    button.Font = Enum.Font.Gotham
+                    button.TextColor3 = Color3.fromRGB(235, 240, 255)
+                    button.TextSize = 13
+                    button.TextXAlignment = Enum.TextXAlignment.Left
+                    button.Text = "  " .. label
+                    button.Parent = peopleFinderList
+                    button.MouseButton1Click:Connect(function()
+                        setKillTarget(targetPlayer)
+                        notifyUser("Kill target", tostring(S.killTargetName), "success")
+                    end)
+                end
+            end
+        end
+
+        peopleFinderList.CanvasSize = UDim2.new(0, 0, 0, math.max(0, shown * 34))
+    end
+
+    function openPeopleFinder()
+        if peopleFinderGui then
+            peopleFinderGui.Enabled = true
+            rebuildPeopleFinderList()
+            return true
+        end
+
+        if not Instance or not Instance.new then
+            S.killAllStatus = "finder ui unavailable"
+            notifyUser("Find people", "Instance.new unavailable", "warning")
+            return false
+        end
+
+        local parent = peopleFinderParent()
+        if not parent then
+            S.killAllStatus = "finder parent missing"
+            notifyUser("Find people", "ui parent missing", "warning")
+            return false
+        end
+
+        local gui = Instance.new("ScreenGui")
+        gui.Name = "BetterVoidPeopleFinder"
+        gui.ResetOnSpawn = false
+        gui.IgnoreGuiInset = true
+        gui.Parent = parent
+
+        local frame = Instance.new("Frame")
+        frame.Name = "Panel"
+        frame.BackgroundColor3 = Color3.fromRGB(16, 20, 28)
+        frame.BorderSizePixel = 0
+        frame.Position = UDim2.new(0, 72, 0, 92)
+        frame.Size = UDim2.new(0, 330, 0, 430)
+        frame.Parent = gui
+
+        local title = Instance.new("TextLabel")
+        title.BackgroundTransparency = 1
+        title.Position = UDim2.new(0, 12, 0, 8)
+        title.Size = UDim2.new(1, -56, 0, 28)
+        title.Font = Enum.Font.GothamBold
+        title.Text = "Find people"
+        title.TextColor3 = Color3.fromRGB(235, 240, 255)
+        title.TextSize = 16
+        title.TextXAlignment = Enum.TextXAlignment.Left
+        title.Parent = frame
+
+        local close = Instance.new("TextButton")
+        close.BackgroundColor3 = Color3.fromRGB(45, 52, 66)
+        close.BorderSizePixel = 0
+        close.Position = UDim2.new(1, -40, 0, 8)
+        close.Size = UDim2.new(0, 28, 0, 28)
+        close.Font = Enum.Font.GothamBold
+        close.Text = "X"
+        close.TextColor3 = Color3.fromRGB(235, 240, 255)
+        close.TextSize = 14
+        close.Parent = frame
+        close.MouseButton1Click:Connect(function()
+            gui.Enabled = false
+        end)
+
+        local search = Instance.new("TextBox")
+        search.Name = "Search"
+        search.BackgroundColor3 = Color3.fromRGB(25, 31, 42)
+        search.BorderSizePixel = 0
+        search.Position = UDim2.new(0, 12, 0, 46)
+        search.Size = UDim2.new(1, -86, 0, 32)
+        search.ClearTextOnFocus = false
+        search.Font = Enum.Font.Gotham
+        search.PlaceholderText = "Search name..."
+        search.Text = ""
+        search.TextColor3 = Color3.fromRGB(235, 240, 255)
+        search.PlaceholderColor3 = Color3.fromRGB(150, 158, 172)
+        search.TextSize = 13
+        search.Parent = frame
+
+        local refresh = Instance.new("TextButton")
+        refresh.BackgroundColor3 = Color3.fromRGB(48, 102, 170)
+        refresh.BorderSizePixel = 0
+        refresh.Position = UDim2.new(1, -66, 0, 46)
+        refresh.Size = UDim2.new(0, 54, 0, 32)
+        refresh.Font = Enum.Font.GothamBold
+        refresh.Text = "Refresh"
+        refresh.TextColor3 = Color3.fromRGB(255, 255, 255)
+        refresh.TextSize = 12
+        refresh.Parent = frame
+
+        local list = Instance.new("ScrollingFrame")
+        list.Name = "Players"
+        list.BackgroundColor3 = Color3.fromRGB(20, 25, 34)
+        list.BorderSizePixel = 0
+        list.Position = UDim2.new(0, 12, 0, 88)
+        list.Size = UDim2.new(1, -24, 1, -100)
+        list.ScrollBarThickness = 5
+        list.CanvasSize = UDim2.new()
+        list.Parent = frame
+
+        local layout = Instance.new("UIListLayout")
+        layout.Padding = UDim.new(0, 4)
+        layout.SortOrder = Enum.SortOrder.LayoutOrder
+        layout.Parent = list
+
+        peopleFinderGui = gui
+        peopleFinderSearch = search
+        peopleFinderList = list
+
+        pcall(function()
+            search:GetPropertyChangedSignal("Text"):Connect(rebuildPeopleFinderList)
+        end)
+        refresh.MouseButton1Click:Connect(rebuildPeopleFinderList)
+        rebuildPeopleFinderList()
         return true
     end
 
@@ -1573,6 +1889,9 @@ local function boot()
                 S.killAllStatus = "target typed"
             end
         end, "Exact or partial player name")
+        killControls:Button("Find people", function()
+            openPeopleFinder()
+        end)
         killControls:Button("Kill selected target [L]", function()
             task.spawn(function()
                 local ok = killSelectedTarget()
@@ -1657,8 +1976,9 @@ local function boot()
 
     clampSettings()
     setupOverlay()
-    local hasUi = createUi()
+    createUi()
     setupKillTargetScroll()
+    local hasInputHotkeys = setupHotkeys()
 
     if loadedConfig then
         notifyUser("Config", "loaded", "success")
@@ -1747,18 +2067,20 @@ local function boot()
         end
 
         while S.running do
-            if (not hasUi) and pressed(118) then setEnabled(not S.enabled, true) end
-            if pressed(114) then S.toggleRoam() end
-            if pressed(116) then S.toggleAimStabilizer() end
-            if pressed(121) then S.toggleAutoArmor() end
-            if pressed(KEY_KILL_ALL) then task.spawn(function() S.killAll() end) end
-            if pressed(KEY_KILL_SELECTED) then task.spawn(function() S.killSelectedTarget() end) end
-            if pressed(98) then panic() end
-            if pressed(109) then saveReturnMarker() end
-            if pressed(110) then returnToMarker() end
-            if pressed(120) then
-                S.unload()
-                break
+            if not hasInputHotkeys then
+                if pressed(118) then setEnabled(not S.enabled, true) end
+                if pressed(114) then S.toggleRoam() end
+                if pressed(116) then S.toggleAimStabilizer() end
+                if pressed(121) then S.toggleAutoArmor() end
+                if pressed(KEY_KILL_ALL) then task.spawn(function() S.killAll() end) end
+                if pressed(KEY_KILL_SELECTED) then task.spawn(function() S.killSelectedTarget() end) end
+                if pressed(98) then panic() end
+                if pressed(109) then saveReturnMarker() end
+                if pressed(110) then returnToMarker() end
+                if pressed(120) then
+                    S.unload()
+                    break
+                end
             end
             task.wait(0.03)
         end
