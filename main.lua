@@ -111,6 +111,8 @@ local function boot()
         killAllCooldown = 1.5,
         killAllStatus = "idle",
         lastKillAllAt = 0,
+        killTargetUserId = nil,
+        killTargetName = "none",
         hasReturnMarker = false,
         returnX = 0,
         returnY = 0,
@@ -671,8 +673,12 @@ local function boot()
         return true
     end
 
+    local function samePlayer(a, b)
+        return a and b and tonumber(a.UserId) and tonumber(b.UserId) and tonumber(a.UserId) == tonumber(b.UserId)
+    end
+
     local function getKillTarget(player)
-        if not player or player == lp or isFriendlyWhitelisted(player) then
+        if not player or samePlayer(player, lp) or isFriendlyWhitelisted(player) then
             return nil, false
         end
 
@@ -685,7 +691,138 @@ local function boot()
         return character, valid == true
     end
 
-    local function killAll()
+    local function getKillTargetName(player)
+        return player and tostring(player.Name or ("#" .. tostring(player.UserId))) or "none"
+    end
+
+    local function setKillTarget(player)
+        if player and not samePlayer(player, lp) then
+            S.killTargetUserId = tonumber(player.UserId)
+            S.killTargetName = getKillTargetName(player)
+            S.killAllStatus = "target " .. tostring(S.killTargetName)
+            return true
+        end
+
+        S.killTargetUserId = nil
+        S.killTargetName = "none"
+        return false
+    end
+
+    local function clearKillTarget()
+        S.killTargetUserId = nil
+        S.killTargetName = "none"
+        S.killAllStatus = "target cleared"
+        return true
+    end
+
+    local function findKillPlayerByName(query)
+        if not Players then
+            return nil
+        end
+
+        query = string.lower(tostring(query or ""):match("^%s*(.-)%s*$"))
+        if query == "" or query == "none" then
+            return nil
+        end
+
+        local partial
+        for _, player in ipairs(Players:GetPlayers()) do
+            if not samePlayer(player, lp) then
+                local name = string.lower(tostring(player.Name or ""))
+                if name == query then
+                    return player
+                end
+                if not partial and string.find(name, query, 1, true) then
+                    partial = player
+                end
+            end
+        end
+
+        return partial
+    end
+
+    local function getSelectedKillPlayer()
+        if not Players then
+            return nil
+        end
+
+        local selectedUserId = tonumber(S.killTargetUserId)
+        local selectedName = tostring(S.killTargetName or "")
+        for _, player in ipairs(Players:GetPlayers()) do
+            if not samePlayer(player, lp) then
+                if selectedUserId and tonumber(player.UserId) == selectedUserId then
+                    return player
+                end
+                if selectedName ~= "" and selectedName ~= "none" and string.lower(tostring(player.Name or "")) == string.lower(selectedName) then
+                    return player
+                end
+            end
+        end
+
+        return nil
+    end
+
+    local function selectNextKillTarget()
+        if not Players then
+            S.killAllStatus = "players missing"
+            return false
+        end
+
+        local candidates = {}
+        for _, player in ipairs(Players:GetPlayers()) do
+            if not samePlayer(player, lp) and not isFriendlyWhitelisted(player) then
+                candidates[#candidates + 1] = player
+            end
+        end
+
+        if #candidates == 0 then
+            clearKillTarget()
+            S.killAllStatus = "no targets"
+            return false
+        end
+
+        local selectedUserId = tonumber(S.killTargetUserId)
+        local index = 1
+        if selectedUserId then
+            for i, player in ipairs(candidates) do
+                if tonumber(player.UserId) == selectedUserId then
+                    index = i + 1
+                    break
+                end
+            end
+        end
+        if index > #candidates then
+            index = 1
+        end
+
+        return setKillTarget(candidates[index])
+    end
+
+    local function buildKillPellets(targetPlayers)
+        local pellets = {}
+        local targetCount = 0
+
+        for _, player in ipairs(targetPlayers or {}) do
+            local targetCharacter, valid = getKillTarget(player)
+            local head = targetCharacter and targetCharacter:FindFirstChild("Head")
+            if valid and head then
+                targetCount = targetCount + 1
+                local position = head.Position
+                for _ = 1, 20 do
+                    pellets[#pellets + 1] = {
+                        AimPosition = position,
+                        Result1 = position,
+                        Result2 = head,
+                        Result3 = Vector3.yAxis
+                    }
+                end
+            end
+        end
+
+        return pellets, targetCount
+    end
+
+    local function killPlayers(targetPlayers, label)
         local now = tick()
         if now - (S.lastKillAllAt or 0) < S.killAllCooldown then
             S.killAllStatus = "cooldown"
@@ -729,25 +866,10 @@ local function boot()
             return false
         end
 
-        local pellets = {}
-        for _, player in ipairs(Players:GetPlayers()) do
-            local targetCharacter, valid = getKillTarget(player)
-            local head = targetCharacter and targetCharacter:FindFirstChild("Head")
-            if valid and head then
-                local position = head.Position
-                for _ = 1, 20 do
-                    pellets[#pellets + 1] = {
-                        AimPosition = position,
-                        Result1 = position,
-                        Result2 = head,
-                        Result3 = Vector3.yAxis
-                    }
-                end
-            end
-        end
+        local pellets, targetCount = buildKillPellets(targetPlayers)
 
         if #pellets == 0 then
-            S.killAllStatus = "no targets"
+            S.killAllStatus = label and (label .. ": no targets") or "no targets"
             return false
         end
 
@@ -779,8 +901,33 @@ local function boot()
             end)
         end
 
-        S.killAllStatus = "fired " .. tostring(fired) .. "x / " .. tostring(#pellets) .. " pellets"
+        S.killAllStatus = (label and (label .. ": ") or "") .. "fired " .. tostring(fired) .. "x / " .. tostring(targetCount) .. " target(s)"
         return fired > 0
+    end
+
+    local function killAll()
+        return killPlayers(Players and Players:GetPlayers() or {}, "all")
+    end
+
+    local function killSelectedTarget()
+        local player = getSelectedKillPlayer()
+        if not player then
+            S.killAllStatus = "target missing"
+            return false
+        end
+
+        return killPlayers({ player }, getKillTargetName(player))
+    end
+
+    local function killNamedTarget(name)
+        local player = type(name) == "string" and findKillPlayerByName(name) or name
+        if not player then
+            S.killAllStatus = "target missing"
+            return false
+        end
+
+        setKillTarget(player)
+        return killPlayers({ player }, getKillTargetName(player))
     end
 
     local ARMOR_FALLBACK_POSITIONS = {
@@ -1183,6 +1330,16 @@ local function boot()
         if unshootableToggle and unshootableToggle.Set then pcall(function() unshootableToggle:Set(S.unshootable) end) end
     end
     function S.killAll() return killAll() end
+    function S.nextKillTarget() return selectNextKillTarget() end
+    function S.clearKillTarget() return clearKillTarget() end
+    function S.setKillTarget(target)
+        if type(target) == "string" then
+            return setKillTarget(findKillPlayerByName(target))
+        end
+        return setKillTarget(target)
+    end
+    function S.killSelectedTarget() return killSelectedTarget() end
+    function S.killTarget(target) return killNamedTarget(target) end
     function S.buyArmor() return buyArmor(true) end
     function S.panic() panic() end
     function S.saveReturnMarker() return saveReturnMarker() end
@@ -1484,6 +1641,20 @@ local function boot()
                 notifyUser("Kill all", tostring(S.killAllStatus), ok and "success" or "warning")
             end)
         end):SetRisk()
+        controls:Button("Next kill target", function()
+            local ok = selectNextKillTarget()
+            notifyUser("Kill target", ok and tostring(S.killTargetName) or tostring(S.killAllStatus), ok and "success" or "warning")
+        end)
+        controls:Button("Kill selected target", function()
+            task.spawn(function()
+                local ok = killSelectedTarget()
+                notifyUser("Kill target", tostring(S.killAllStatus), ok and "success" or "warning")
+            end)
+        end):SetRisk()
+        controls:Button("Clear kill target", function()
+            clearKillTarget()
+            notifyUser("Kill target", "cleared", "info")
+        end)
 
         controls:Divider("Anti stick")
         controls:Toggle("Anti stick", S.antiStick, function(on)
@@ -1532,6 +1703,7 @@ local function boot()
         status:Label(function() return "Unshootable: " .. (S.unshootable and "ON" or "OFF") .. " / " .. tostring(S.unshootableStatus) end)
         status:Label(function() return "Invincible: " .. (S.invincible and "ON" or "OFF") .. " / " .. tostring(S.invincibleStatus) end)
         status:Label(function() return "Kill all: " .. tostring(S.killAllStatus) end)
+        status:Label(function() return "Kill target: " .. tostring(S.killTargetName or "none") end)
         status:Label(function() return "Anti stick: " .. (S.antiStick and "ON" or "OFF") end)
         status:Label(function() return "Armor assist: " .. (S.autoArmor and "ON" or "OFF") end)
         status:Label(function()
@@ -1544,7 +1716,7 @@ local function boot()
             return "Y position: " .. (root and tostring(math.floor(root.Position.Y)) or "none")
         end)
         status:Label(function() return "Marker: " .. (S.hasReturnMarker and "saved" or "none") end)
-        status:Info("P menu, V void, J unshootable, H invincible, K kill all, Y armor assist, R roam, T aim, G anti stick, B panic, M/N marker, X unload.")
+        status:Info("P menu, V void, J unshootable, H invincible, K kill all, L selected kill, Y armor assist, R roam, T aim, G anti stick, B panic, M/N marker, X unload.")
 
         syncUi()
         notifyUser("Better Void", "INS-ui loaded. P opens menu, V toggles.", "success")
@@ -1678,6 +1850,7 @@ local function boot()
             if pressed(104) then S.toggleInvincible() end
             if pressed(106) then S.toggleUnshootable() end
             if pressed(107) then task.spawn(function() S.killAll() end) end
+            if pressed(108) then task.spawn(function() S.killSelectedTarget() end) end
             if pressed(98) then panic() end
             if pressed(109) then saveReturnMarker() end
             if pressed(110) then returnToMarker() end
