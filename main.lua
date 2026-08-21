@@ -1536,24 +1536,10 @@ local function boot()
 
                 if keyMatches(input, "V", 118) then
                     setEnabled(not S.enabled, true)
-                elseif keyMatches(input, "R", 114) then
-                    S.toggleRoam()
-                elseif keyMatches(input, "T", 116) then
-                    S.toggleAimStabilizer()
-                elseif keyMatches(input, "Y", 121) then
-                    S.toggleAutoArmor()
                 elseif keyMatches(input, "K", KEY_KILL_ALL) then
                     task.spawn(function() S.killAll() end)
                 elseif keyMatches(input, "L", KEY_KILL_SELECTED) then
                     task.spawn(function() S.killSelectedTarget() end)
-                elseif keyMatches(input, "B", 98) then
-                    panic()
-                elseif keyMatches(input, "M", 109) then
-                    saveReturnMarker()
-                elseif keyMatches(input, "N", 110) then
-                    returnToMarker()
-                elseif keyMatches(input, "X", 120) then
-                    S.unload()
                 end
             end)
         end)
@@ -1764,7 +1750,7 @@ local function boot()
     local function createUi()
         Lib = loadInsUi()
         if not Lib or not Lib.CreateWindow then
-            notifyUser("Better Void", "loaded without UI. V toggles, X unloads.", "warning")
+            notifyUser("Better Void", "loaded without UI. V toggles void.", "warning")
             return false
         end
 
@@ -1963,7 +1949,7 @@ local function boot()
             return "Y position: " .. (root and tostring(math.floor(root.Position.Y)) or "none")
         end)
         status:Label(function() return "Marker: " .. (S.hasReturnMarker and "saved" or "none") end)
-        status:Info("P menu, V void, K kill all, L selected kill, mouse wheel target, Y armor assist, R roam, T aim, B panic, M/N marker, X unload.")
+        status:Info("P menu, V void, K kill all, L selected kill, mouse wheel target.")
         killStatus:Label(function() return "Target: " .. tostring(S.killTargetName or "none") end)
         killStatus:Label(function() return "Typed name: " .. tostring(S.killTargetInput or "") end)
         killStatus:Label(function() return "Status: " .. tostring(S.killAllStatus) end)
@@ -2069,18 +2055,8 @@ local function boot()
         while S.running do
             if not hasInputHotkeys then
                 if pressed(118) then setEnabled(not S.enabled, true) end
-                if pressed(114) then S.toggleRoam() end
-                if pressed(116) then S.toggleAimStabilizer() end
-                if pressed(121) then S.toggleAutoArmor() end
                 if pressed(KEY_KILL_ALL) then task.spawn(function() S.killAll() end) end
                 if pressed(KEY_KILL_SELECTED) then task.spawn(function() S.killSelectedTarget() end) end
-                if pressed(98) then panic() end
-                if pressed(109) then saveReturnMarker() end
-                if pressed(110) then returnToMarker() end
-                if pressed(120) then
-                    S.unload()
-                    break
-                end
             end
             task.wait(0.03)
         end
