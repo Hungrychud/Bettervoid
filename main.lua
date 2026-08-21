@@ -113,6 +113,7 @@ local function boot()
         lastKillAllAt = 0,
         killTargetUserId = nil,
         killTargetName = "none",
+        killTargetInput = "",
         hasReturnMarker = false,
         returnX = 0,
         returnY = 0,
@@ -695,22 +696,34 @@ local function boot()
         return player and tostring(player.Name or ("#" .. tostring(player.UserId))) or "none"
     end
 
+    local function setKillTargetInputValue(value)
+        S.killTargetInput = tostring(value or "")
+        if handles.killTargetName then
+            pcall(function()
+                handles.killTargetName.Value = S.killTargetInput
+            end)
+        end
+    end
+
     local function setKillTarget(player)
         if player and not samePlayer(player, lp) then
             S.killTargetUserId = tonumber(player.UserId)
             S.killTargetName = getKillTargetName(player)
+            setKillTargetInputValue(S.killTargetName)
             S.killAllStatus = "target " .. tostring(S.killTargetName)
             return true
         end
 
         S.killTargetUserId = nil
         S.killTargetName = "none"
+        setKillTargetInputValue("")
         return false
     end
 
     local function clearKillTarget()
         S.killTargetUserId = nil
         S.killTargetName = "none"
+        setKillTargetInputValue("")
         S.killAllStatus = "target cleared"
         return true
     end
@@ -747,7 +760,7 @@ local function boot()
         end
 
         local selectedUserId = tonumber(S.killTargetUserId)
-        local selectedName = tostring(S.killTargetName or "")
+        local selectedName = tostring((S.killTargetInput and S.killTargetInput ~= "" and S.killTargetInput) or S.killTargetName or "")
         for _, player in ipairs(Players:GetPlayers()) do
             if not samePlayer(player, lp) then
                 if selectedUserId and tonumber(player.UserId) == selectedUserId then
@@ -759,7 +772,7 @@ local function boot()
             end
         end
 
-        return nil
+        return findKillPlayerByName(selectedName)
     end
 
     local function selectNextKillTarget()
@@ -1148,6 +1161,7 @@ local function boot()
         if handles.unshootableHitboxSize and handles.unshootableHitboxSize.Set then pcall(function() handles.unshootableHitboxSize:Set(S.unshootableHitboxSize) end) end
         if handles.unshootableInterval and handles.unshootableInterval.Set then pcall(function() handles.unshootableInterval:Set(S.unshootableInterval) end) end
         if handles.killAllCooldown and handles.killAllCooldown.Set then pcall(function() handles.killAllCooldown:Set(S.killAllCooldown) end) end
+        if handles.killTargetName then pcall(function() handles.killTargetName.Value = S.killTargetInput or "" end) end
 
         if roamToggle and roamToggle.Set then pcall(function() roamToggle:Set(S.roam) end) end
         if overlayToggle and overlayToggle.Set then pcall(function() overlayToggle:Set(S.showOverlay) end) end
@@ -1508,7 +1522,7 @@ local function boot()
 
         win = Lib:CreateWindow({
             title = "Better Void",
-            subtitle = "Void only",
+            subtitle = "Void + instant kill",
             size = Vector2.new(620, 430),
             position = Vector2.new(48, 48),
             menuKey = "p",
@@ -1534,9 +1548,12 @@ local function boot()
         end
 
         local tab = win:Tab("Void", "shield")
+        local killTab = win:Tab("Instant Kill", "target")
         local controls = tab:Section("Controls", "Left", "void movement")
         local utilities = tab:Section("Utilities", "Left", "presets, marker, config")
         local status = tab:Section("Status", "Right", "live values")
+        local killControls = killTab:Section("Controls", "Left", "target controls")
+        local killStatus = killTab:Section("Status", "Right", "instant kill status")
 
         toggle = controls:Toggle("Better Void", false, function(on)
             if syncingToggle then
@@ -1631,30 +1648,53 @@ local function boot()
             S.unshootableInterval = math.max(0.1, math.min(2, v))
         end)
 
-        controls:Divider("Offense")
-        handles.killAllCooldown = controls:Slider("Kill all cooldown", S.killAllCooldown, 0.5, 0.5, 10, "s", function(v)
-            S.killAllCooldown = math.max(0.5, math.min(10, v))
-        end)
-        controls:Button("Kill all now", function()
-            task.spawn(function()
-                local ok = killAll()
-                notifyUser("Kill all", tostring(S.killAllStatus), ok and "success" or "warning")
-            end)
-        end):SetRisk()
-        controls:Button("Next kill target", function()
-            local ok = selectNextKillTarget()
-            notifyUser("Kill target", ok and tostring(S.killTargetName) or tostring(S.killAllStatus), ok and "success" or "warning")
-        end)
-        controls:Button("Kill selected target", function()
+        killControls:Divider("Target")
+        handles.killTargetName = killControls:Textbox("Target name", S.killTargetInput or "", function(value)
+            local text = tostring(value or ""):match("^%s*(.-)%s*$")
+            setKillTargetInputValue(text)
+            if text == "" then
+                S.killTargetUserId = nil
+                S.killTargetName = "none"
+                S.killAllStatus = "target cleared"
+                return
+            end
+
+            local player = findKillPlayerByName(text)
+            if player then
+                S.killTargetUserId = tonumber(player.UserId)
+                S.killTargetName = getKillTargetName(player)
+                S.killAllStatus = "target " .. tostring(S.killTargetName)
+            else
+                S.killTargetUserId = nil
+                S.killTargetName = text
+                S.killAllStatus = "target typed"
+            end
+        end, "Exact or partial player name")
+        killControls:Button("Kill typed target", function()
             task.spawn(function()
                 local ok = killSelectedTarget()
                 notifyUser("Kill target", tostring(S.killAllStatus), ok and "success" or "warning")
             end)
         end):SetRisk()
-        controls:Button("Clear kill target", function()
+        killControls:Button("Next kill target", function()
+            local ok = selectNextKillTarget()
+            notifyUser("Kill target", ok and tostring(S.killTargetName) or tostring(S.killAllStatus), ok and "success" or "warning")
+        end)
+        killControls:Button("Clear kill target", function()
             clearKillTarget()
             notifyUser("Kill target", "cleared", "info")
         end)
+
+        killControls:Divider("All players")
+        handles.killAllCooldown = killControls:Slider("Kill cooldown", S.killAllCooldown, 0.5, 0.5, 10, "s", function(v)
+            S.killAllCooldown = math.max(0.5, math.min(10, v))
+        end)
+        killControls:Button("Kill all now", function()
+            task.spawn(function()
+                local ok = killAll()
+                notifyUser("Kill all", tostring(S.killAllStatus), ok and "success" or "warning")
+            end)
+        end):SetRisk()
 
         controls:Divider("Anti stick")
         controls:Toggle("Anti stick", S.antiStick, function(on)
@@ -1717,6 +1757,10 @@ local function boot()
         end)
         status:Label(function() return "Marker: " .. (S.hasReturnMarker and "saved" or "none") end)
         status:Info("P menu, V void, J unshootable, H invincible, K kill all, L selected kill, Y armor assist, R roam, T aim, G anti stick, B panic, M/N marker, X unload.")
+        killStatus:Label(function() return "Target: " .. tostring(S.killTargetName or "none") end)
+        killStatus:Label(function() return "Typed name: " .. tostring(S.killTargetInput or "") end)
+        killStatus:Label(function() return "Status: " .. tostring(S.killAllStatus) end)
+        killStatus:Info("Type a full or partial player name, then use Kill typed target. K still kills all; L kills the selected target.")
 
         syncUi()
         notifyUser("Better Void", "INS-ui loaded. P opens menu, V toggles.", "success")
