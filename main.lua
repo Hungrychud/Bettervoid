@@ -86,7 +86,7 @@ local function boot()
         armorTriggerRatio = 0.95,
         armorStatus = "idle",
         armorSafeMode = true,
-        killAllCooldown = 1.5,
+        killAllCooldown = 0.8,
         killAllStatus = "idle",
         killInProgress = false,
         resetKey = "F",
@@ -193,7 +193,7 @@ local function boot()
         S.aimHoldTime = math.max(0.05, math.min(3, tonumber(S.aimHoldTime) or 0.75))
         S.armorCooldown = math.max(2, math.min(60, tonumber(S.armorCooldown) or 8))
         S.armorTriggerRatio = math.max(0.1, math.min(1, tonumber(S.armorTriggerRatio) or 0.95))
-        S.killAllCooldown = math.max(0.5, math.min(10, tonumber(S.killAllCooldown) or 1.5))
+        S.killAllCooldown = math.max(0.3, math.min(10, tonumber(S.killAllCooldown) or 0.8))
         S.resetKey = normalizeKeyName(S.resetKey, "F")
         if S.resetKey == "V" or S.resetKey == "K" or S.resetKey == "L" then
             S.resetKey = "F"
@@ -297,10 +297,10 @@ local function boot()
         ["[TacticalShotgun]"] = true
     }
 
-    local KILL_PELLETS_PER_TARGET = 6
-    local KILL_SHOT_BURST = 2
-    local KILL_SHOT_DELAY = 0.08
-    local KILL_EQUIP_DELAY = 0.08
+    local KILL_PELLETS_PER_TARGET = 10
+    local KILL_SHOT_BURST = 3
+    local KILL_SHOT_DELAY = 0.065
+    local KILL_EQUIP_DELAY = 0.06
     local KEY_KILL_ALL = 107
     local KEY_KILL_SELECTED = 108
     local SCROLL_TARGET_DELAY = 0.12
@@ -799,9 +799,13 @@ local function boot()
                 targetCount = targetCount + 1
                 local position = head.Position
                 for _ = 1, KILL_PELLETS_PER_TARGET do
+                    local jx = (math.random() - 0.5) * 0.5
+                    local jy = (math.random() - 0.5) * 0.5
+                    local jz = (math.random() - 0.5) * 0.5
+                    local jittered = position + Vector3.new(jx, jy, jz)
                     pellets[#pellets + 1] = {
-                        AimPosition = position,
-                        Result1 = position,
+                        AimPosition = jittered,
+                        Result1 = jittered,
                         Result2 = head,
                         Result3 = Vector3.yAxis
                     }
@@ -889,8 +893,12 @@ local function boot()
             if not handle then
                 break
             end
+            local shotPellets = shot == 1 and pellets or buildKillPellets(targetPlayers)
+            if #shotPellets == 0 then
+                break
+            end
             local okFire = pcall(function()
-                remote:FireServer("ShootGun", handle, handle.Position, pellets, nil, nil, nil, range, damage)
+                remote:FireServer("ShootGun", handle, handle.Position, shotPellets, nil, nil, nil, range, damage)
             end)
             if okFire then
                 fired = fired + 1
@@ -1934,8 +1942,8 @@ local function boot()
         end)
 
         killControls:Divider("All players")
-        handles.killAllCooldown = killControls:Slider("Kill cooldown", S.killAllCooldown, 0.5, 0.5, 10, "s", function(v)
-            S.killAllCooldown = math.max(0.5, math.min(10, v))
+        handles.killAllCooldown = killControls:Slider("Kill cooldown", S.killAllCooldown, 0.1, 0.3, 10, "s", function(v)
+            S.killAllCooldown = math.max(0.3, math.min(10, v))
         end)
         killControls:Button("Kill all now [K]", function()
             task.spawn(function()
