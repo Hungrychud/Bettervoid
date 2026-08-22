@@ -14,7 +14,7 @@ local function boot()
     -- ─── State ───────────────────────────────────────────────────────────────
     local S = {
         running          = true,
-        killAllCooldown  = 0.8,
+        killAllCooldown  = 0.35,
         lastKillAllAt    = 0,
         autoKillInterval = 2.0,
         killOnSightRange = 500,
@@ -650,30 +650,37 @@ local function boot()
     end
 
     task.spawn(function()
-        local lastMassAt   = 0     -- kill throttle for all/sight modes
+        local lastMassAt    = 0    -- kill throttle for all/sight modes
         local lastTgtKillAt = 0    -- kill throttle for the selected target
-        local stompedThisKO = false
+        local lastStompAt   = 0    -- stomp retry throttle
+        local lastRetargetAt = 0
         while S.running do
             local ok, err = pcall(function()
                 local now = tick()
 
                 if S.autoKillTarget then
-                    -- Continuous cycle on ONE target: kill while up, stomp once
-                    -- when KO'd, then re-kill instantly the moment it respawns.
-                    if S.autoRetarget then autoRetargetIfDead() end
+                    -- Continuous cycle on exactly ONE target: kill while up,
+                    -- stomp while KO'd, re-kill the instant it respawns. Only
+                    -- retarget if the selected player LEFT the game (not on
+                    -- death) — otherwise it would hop and kill everyone.
                     local p = getSelectedPlayer()
-                    if p then
+                    if not p then
+                        if S.autoRetarget and now - lastRetargetAt >= 1 then
+                            lastRetargetAt = now
+                            selectNearest()
+                        end
+                    else
                         local alive, koed = targetState(p.Character)
                         if koed then
-                            if S.autoStomp and not stompedThisKO and not S.stompInProgress then
-                                stompedThisKO = true
+                            -- retry stomp while down (first attempt can miss)
+                            if S.autoStomp and not S.stompInProgress and now - lastStompAt >= 0.6 then
+                                lastStompAt = now
                                 task.spawn(function() doStomp(p) end)
                             end
                         elseif alive then
-                            stompedThisKO = false      -- respawned / back up
-                            if now - lastTgtKillAt >= S.autoKillInterval then
+                            if now - lastTgtKillAt >= 0.35 then
                                 lastTgtKillAt = now
-                                killPlayers({ p }, "auto", false, true)
+                                killPlayers({ p }, "auto", false, false) -- full burst = faster KO
                             end
                         end
                     end
