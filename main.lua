@@ -1,276 +1,63 @@
 local function boot()
-    local Players
+    local Players = game:GetService("Players")
     local lp
-    local startedAt = tick()
 
+    local t0 = tick()
     repeat
-        local loaded = false
-        if game then
-            local ok, result = pcall(function()
-                return game:IsLoaded()
-            end)
-            loaded = ok and result
-        end
+        lp = Players.LocalPlayer
+        if not lp then task.wait(0.1) end
+    until lp or tick() - t0 > 10
+    if not lp then warn("BetterVoid: LocalPlayer not found") return end
 
-        if loaded then
-            local ok, service = pcall(function()
-                return game:GetService("Players")
-            end)
-            Players = ok and service or nil
-            if not Players then
-                Players = game:FindFirstChild("Players")
-            end
-            lp = Players and Players.LocalPlayer
-        end
+    if _G.BV and _G.BV.unload then pcall(_G.BV.unload) end
 
-        if not lp then
-            task.wait(0.1)
-        end
-    until lp or tick() - startedAt > 10
-
-    if not lp then
-        warn("Better Void: LocalPlayer not found")
-        return
-    end
-
-    if _G.BetterVoid and _G.BetterVoid.unload then
-        pcall(function()
-            _G.BetterVoid.unload()
-        end)
-    end
-
-    local CONFIG_FOLDER = "BetterVoid"
-    local CONFIG_FILE = CONFIG_FOLDER .. "/void_config.cfg"
-    local CONFIG_KEYS = {
-        "height",
-        "rate",
-        "velocity",
-        "returnHeight",
-        "roam",
-        "roamRadius",
-        "roamSpeed",
-        "aimStabilizer",
-        "aimHoldTime",
-        "showOverlay",
-        "autoArmor",
-        "armorCooldown",
-        "armorTriggerRatio",
-        "killAllCooldown",
-        "autoKillTarget",
-        "autoKillAll",
-        "autoKillInterval",
-        "killOnSight",
-        "killOnSightRange",
-        "autoRetarget",
-        "resetKey",
-        "hasReturnMarker",
-        "returnX",
-        "returnY",
-        "returnZ"
-    }
-
+    -- ─── State ───────────────────────────────────────────────────────────────
     local S = {
-        enabled = false,
-        running = true,
-        height = 100000,
-        rate = 0.08,
-        velocity = 1200,
-        returnHeight = 3,
-        roam = false,
-        roamRadius = 900,
-        roamSpeed = 100000,
-        aimStabilizer = true,
-        aimHoldTime = 0.75,
-        aimHoldUntil = 0,
-        aimLockX = nil,
-        aimLockY = nil,
-        aimLockZ = nil,
-        showOverlay = true,
-        autoArmor = false,
-        armorBuying = false,
-        armorCooldown = 8,
-        armorTriggerRatio = 0.95,
-        armorStatus = "idle",
-        armorSafeMode = true,
-        killAllCooldown = 0.8,
-        autoKillTarget = false,
-        autoKillAll = false,
+        running          = true,
+        killAllCooldown  = 0.8,
         autoKillInterval = 2.0,
-        killOnSight = false,
         killOnSightRange = 500,
-        autoRetarget = false,
-        killAllStatus = "idle",
-        killInProgress = false,
-        resetKey = "F",
-        resetActive = false,
-        lastKillAllAt = 0,
+        autoKillTarget   = false,
+        autoKillAll      = false,
+        killOnSight      = false,
+        autoRetarget     = false,
         killTargetUserId = nil,
-        killTargetName = "none",
-        killTargetInput = "",
-        hasReturnMarker = false,
-        returnX = 0,
-        returnY = 0,
-        returnZ = 0,
-        anchorX = nil,
-        anchorY = nil,
-        anchorZ = nil,
-        currentX = 0,
-        currentY = 0,
-        currentZ = 0,
-        lastThreatName = "none",
-        lastThreatDistance = 0,
-        lastMoveAt = 0
+        killTargetName   = "none",
+        killTargetInput  = "",
+        killAllStatus    = "idle",
+        killInProgress   = false,
+        lastKillAllAt    = 0,
     }
+    _G.BV = S
 
-    _G.BetterVoid = S
+    -- ─── Kill constants ───────────────────────────────────────────────────────
+    local PELLETS_PER_TARGET = 10
+    local SHOT_BURST         = 3
+    local SHOT_DELAY         = 0.065
+    local EQUIP_DELAY        = 0.06
+    local LOADOUT            = { "[Double-Barrel SG]", "[Revolver]", "[TacticalShotgun]", "None" }
+    local GUN_NAMES          = { ["[Double-Barrel SG]"] = true, ["[Revolver]"] = true, ["[TacticalShotgun]"] = true }
 
-    local Lib
-    local win
-    local toggle
-    local roamToggle
-    local overlayToggle
-    local autoArmorToggle
-    local autoKillTargetToggle
-    local autoKillAllToggle
-    local killOnSightToggle
-    local autoRetargetToggle
-    local handles = {}
-    local overlay = { items = {} }
-    local syncingToggle = false
-    local scrollConnection = nil
-    local hotkeyConnection = nil
-    local peopleFinderButtons = {}
-    local openPeopleFinder
-    local destroyPeopleFinder
+    -- ─── UI handles ──────────────────────────────────────────────────────────
+    local Lib, win
+    local handles              = {}
+    local finderButtons        = {}
+    local autoKillTargetToggle = nil
+    local autoKillAllToggle    = nil
+    local killOnSightToggle    = nil
+    local autoRetargetToggle   = nil
 
-    local function notifyUser(title, text, kind)
+    -- ─── Notify ──────────────────────────────────────────────────────────────
+    local function notify(title, text, kind)
         if Lib and Lib.Notify then
-            local ok = pcall(function()
-                Lib:Notify(title, text, 2, kind or "info")
-            end)
-            if ok then
-                return
-            end
+            pcall(function() Lib:Notify(title, text, 2, kind or "info") end)
+            return
         end
-
-        if notify then
-            local ok = pcall(function()
-                notify(title, text, 2)
-            end)
-            if ok then
-                return
-            end
-        end
-
-        print("[Better Void] " .. tostring(title) .. ": " .. tostring(text))
+        if notify then pcall(function() notify(title, text, 2) end) return end
+        print("[BV] " .. tostring(title) .. ": " .. tostring(text))
     end
 
-    local function ensureConfigFolder()
-        if isfolder and makefolder and not isfolder(CONFIG_FOLDER) then
-            pcall(function()
-                makefolder(CONFIG_FOLDER)
-            end)
-        end
-    end
-
-    local function normalizeKeyName(value, fallback)
-        local text = tostring(value or ""):match("^%s*(.-)%s*$")
-        if text == "" then
-            text = fallback or "F"
-        end
-
-        text = string.gsub(text, "%s+", "")
-        if #text == 1 then
-            return string.upper(text)
-        end
-
-        return string.upper(string.sub(text, 1, 1)) .. string.lower(string.sub(text, 2))
-    end
-
-    local function pollCodeForKeyName(value)
-        local key = normalizeKeyName(value, "")
-        if #key == 1 then
-            local byte = string.byte(string.lower(key))
-            if byte then
-                return byte
-            end
-        end
-
-        return nil
-    end
-
-    local function clampSettings()
-        S.height = math.max(100, math.min(100000, tonumber(S.height) or 100000))
-        S.rate = math.max(0.03, math.min(0.5, tonumber(S.rate) or 0.08))
-        S.velocity = math.max(500, math.min(5000, tonumber(S.velocity) or 1200))
-        S.returnHeight = math.max(0, math.min(50, tonumber(S.returnHeight) or 3))
-        S.roamRadius = math.max(100, math.min(5000, tonumber(S.roamRadius) or 900))
-        S.roamSpeed = math.max(0.1, math.min(100000, tonumber(S.roamSpeed) or 100000))
-        S.aimHoldTime = math.max(0.05, math.min(3, tonumber(S.aimHoldTime) or 0.75))
-        S.armorCooldown = math.max(2, math.min(60, tonumber(S.armorCooldown) or 8))
-        S.armorTriggerRatio = math.max(0.1, math.min(1, tonumber(S.armorTriggerRatio) or 0.95))
-        S.killAllCooldown = math.max(0.3, math.min(10, tonumber(S.killAllCooldown) or 0.8))
-        S.autoKillInterval = math.max(0.5, math.min(30, tonumber(S.autoKillInterval) or 2.0))
-        S.killOnSightRange = math.max(50, math.min(5000, tonumber(S.killOnSightRange) or 500))
-        S.resetKey = normalizeKeyName(S.resetKey, "F")
-        if S.resetKey == "V" or S.resetKey == "K" or S.resetKey == "L" then
-            S.resetKey = "F"
-        end
-        S.returnX = tonumber(S.returnX) or 0
-        S.returnY = tonumber(S.returnY) or 0
-        S.returnZ = tonumber(S.returnZ) or 0
-    end
-
-    local function saveConfig()
-        if not writefile then
-            return false, "writefile missing"
-        end
-
-        ensureConfigFolder()
-        local lines = {}
-        for _, key in ipairs(CONFIG_KEYS) do
-            lines[#lines + 1] = key .. "=" .. tostring(S[key])
-        end
-
-        local ok, err = pcall(function()
-            writefile(CONFIG_FILE, table.concat(lines, "\n"))
-        end)
-        return ok, err
-    end
-
-    local function loadConfig()
-        if not readfile or not isfile or not isfile(CONFIG_FILE) then
-            return false, "config missing"
-        end
-
-        local ok, data = pcall(function()
-            return readfile(CONFIG_FILE)
-        end)
-        if not ok or type(data) ~= "string" then
-            return false, data
-        end
-
-        for line in string.gmatch(data, "[^\r\n]+") do
-            local key, raw = string.match(line, "^([%w_]+)=(.*)$")
-            if key and S[key] ~= nil then
-                local kind = type(S[key])
-                if kind == "boolean" then
-                    S[key] = raw == "true"
-                elseif kind == "number" then
-                    local value = tonumber(raw)
-                    if value then
-                        S[key] = value
-                    end
-                elseif kind == "string" then
-                    S[key] = raw
-                end
-            end
-        end
-
-        clampSettings()
-        return true
-    end
-
+    -- ─── Character helpers ────────────────────────────────────────────────────
     local function getRoot()
         local char = lp and lp.Character
         return char and char:FindFirstChild("HumanoidRootPart")
@@ -278,407 +65,50 @@ local function boot()
 
     local function getHumanoid()
         local char = lp and lp.Character
-        if not char then
-            return nil
-        end
-
-        local hum = nil
-        pcall(function()
-            hum = char:FindFirstChildOfClass("Humanoid")
-        end)
-        return hum or char:FindFirstChild("Humanoid")
-    end
-
-    local function getArmorState()
-        local char = lp and lp.Character
-        local effects = char and char:FindFirstChild("BodyEffects")
-        local armor = effects and effects:FindFirstChild("Armor")
-        local maxArmor = game:GetService("ReplicatedStorage"):FindFirstChild("MaxArmor")
-
-        if armor and maxArmor then
-            return tonumber(armor.Value) or 0, tonumber(maxArmor.Value) or 0
-        end
-
-        return nil, nil
-    end
-
-    local KILL_ALL_LOADOUT = {
-        "[Double-Barrel SG]",
-        "[Revolver]",
-        "[TacticalShotgun]",
-        "None"
-    }
-
-    local KILL_ALL_GUNS = {
-        ["[Double-Barrel SG]"] = true,
-        ["[Revolver]"] = true,
-        ["[TacticalShotgun]"] = true
-    }
-
-    local KILL_PELLETS_PER_TARGET = 10
-    local KILL_SHOT_BURST = 3
-    local KILL_SHOT_DELAY = 0.065
-    local KILL_EQUIP_DELAY = 0.06
-    local KEY_KILL_ALL = 107
-    local KEY_KILL_SELECTED = 108
-    local SCROLL_TARGET_DELAY = 0.12
-
-    local killAllRemote = nil
-    local loadoutRemote = nil
-    local refillActive = false
-    local lastTargetScrollAt = 0
-
-    local function isRemoteEvent(object)
-        return object and object.ClassName == "RemoteEvent"
-    end
-
-    local function instanceKey(object)
-        if not object then
-            return "nil"
-        end
-
-        local ok, address = pcall(function()
-            return object.Address
-        end)
-        if ok and address then
-            return tostring(address)
-        end
-
-        local okName, fullName = pcall(function()
-            return object:GetFullName()
-        end)
-        return okName and fullName or tostring(object)
-    end
-
-    local function findKillRemote()
-        local storage = game:GetService("ReplicatedStorage")
-        local gameRemotes = storage and storage:FindFirstChild("GameRemotes")
-        local mainRemotes = storage and storage:FindFirstChild("MainRemotes")
-        local exact = (gameRemotes and gameRemotes:FindFirstChild("MainGameEvent")) or (mainRemotes and mainRemotes:FindFirstChild("MainRemoteEvent"))
-
-        if isRemoteEvent(exact) then
-            return exact
-        end
-
-        local fallback = nil
-        local ok, descendants = pcall(function()
-            return storage:GetDescendants()
-        end)
-        if not ok or not descendants then
-            return nil
-        end
-
-        for _, object in ipairs(descendants) do
-            if isRemoteEvent(object) then
-                fallback = fallback or object
-                local name = string.lower(object.Name or "")
-                if string.find(name, "main", 1, true) or string.find(name, "game", 1, true) or string.find(name, "settings", 1, true) then
-                    return object
-                end
-            end
-        end
-
-        return fallback
-    end
-
-    local function findLoadoutRemote()
-        local storage = game:GetService("ReplicatedStorage")
-        local exact = storage and storage:FindFirstChild("Loadout")
-        if isRemoteEvent(exact) then
-            return exact
-        end
-
-        local remotes = storage and storage:FindFirstChild("Remotes")
-        exact = remotes and remotes:FindFirstChild("Loadout")
-        if isRemoteEvent(exact) then
-            return exact
-        end
-
-        local ok, descendants = pcall(function()
-            return storage:GetDescendants()
-        end)
-        if not ok or not descendants then
-            return nil
-        end
-
-        for _, object in ipairs(descendants) do
-            if isRemoteEvent(object) and string.find(string.lower(object.Name or ""), "loadout", 1, true) then
-                return object
-            end
-        end
-
-        return nil
-    end
-
-    local function resolveKillAllRemotes()
-        if not isRemoteEvent(killAllRemote) then
-            killAllRemote = findKillRemote()
-        end
-        if not isRemoteEvent(loadoutRemote) then
-            loadoutRemote = findLoadoutRemote()
-        end
-        return killAllRemote, loadoutRemote
-    end
-
-    local function isFriendlyWhitelisted(player)
-        local environment = (getgenv and getgenv()) or _G
-        local loadedLibrary = environment and (environment.Library or _G.Library)
-
-        if loadedLibrary == nil or type(loadedLibrary.get_priority) ~= "function" then
-            return false
-        end
-
-        local success, priority = pcall(function()
-            return loadedLibrary.get_priority(player)
-        end)
-
-        return success and tostring(priority or ""):lower() == "friendly"
+        if not char then return nil end
+        local h
+        pcall(function() h = char:FindFirstChildOfClass("Humanoid") end)
+        return h or char:FindFirstChild("Humanoid")
     end
 
     local function getGunContainers()
         return lp and lp:FindFirstChild("Backpack"), lp and lp.Character
     end
 
-    local function getTacticalShotgun(character, backpack)
-        return (backpack and backpack:FindFirstChild("[TacticalShotgun]")) or (character and character:FindFirstChild("[TacticalShotgun]"))
-    end
-
-    local function requestLoadout()
-        local _, remote = resolveKillAllRemotes()
-        if not remote then
-            S.killAllStatus = "loadout remote missing"
-            return false
-        end
-
-        local ok = pcall(function()
-            remote:FireServer(KILL_ALL_LOADOUT)
-        end)
-        S.killAllStatus = ok and "loadout requested" or "loadout failed"
-        return ok
-    end
-
-    local function requestAmmoRefill(tool, ammo)
-        local _, remote = resolveKillAllRemotes()
-        if not remote or refillActive or not tool or not ammo then
-            return false
-        end
-
-        local backpack, character = getGunContainers()
-        if not backpack then
-            S.killAllStatus = "backpack missing"
-            return false
-        end
-
-        pcall(function()
-            ammo:SetAttribute("ZeeKillRefillRequested", true)
-        end)
-
-        refillActive = true
-        local requestedName = tool.Name
-        local oldTools = {}
-        local equippedTools = {}
-
-        for _, container in ipairs({ backpack, character }) do
-            if container then
-                for _, item in ipairs(container:GetChildren()) do
-                    if item.ClassName == "Tool" and KILL_ALL_GUNS[item.Name] then
-                        oldTools[instanceKey(item)] = item
-                        if item.Parent == character then
-                            equippedTools[item.Name] = true
-                        end
-                    end
-                end
-            end
-        end
-
-        local ok = pcall(function()
-            remote:FireServer(KILL_ALL_LOADOUT)
-        end)
-        if not ok then
-            refillActive = false
-            S.killAllStatus = "refill failed"
-            return false
-        end
-
-        local newestTools = {}
-        local deadline = tick() + 2
-        while S.running and tick() < deadline do
-            for _, container in ipairs({ backpack, character }) do
-                if container then
-                    for _, item in ipairs(container:GetChildren()) do
-                        if item.ClassName == "Tool" and KILL_ALL_GUNS[item.Name] and not oldTools[instanceKey(item)] then
-                            newestTools[item.Name] = item
-                        end
-                    end
-                end
-            end
-
-            if next(newestTools) then
-                break
-            end
-
-            task.wait(0.05)
-        end
-
-        local humanoid = getHumanoid()
-        for name, item in pairs(newestTools) do
-            if equippedTools[name] and character and item.Parent then
-                local equipped = false
-                if humanoid then
-                    equipped = pcall(function()
-                        humanoid:EquipTool(item)
-                    end)
-                end
-                if not equipped then
-                    pcall(function()
-                        item.Parent = character
-                    end)
-                end
-            end
-        end
-
-        if not newestTools[requestedName] then
-            pcall(function()
-                ammo:SetAttribute("ZeeKillRefillRequested", nil)
-            end)
-        end
-
-        refillActive = false
-        S.killAllStatus = next(newestTools) and "ammo refilled" or "refill timeout"
-        return newestTools[requestedName] or false
-    end
-
-    local function usableAmmo(tool, ammo)
-        if not ammo then
-            return false
-        end
-
-        local value = tonumber(ammo.Value) or 0
-        if value <= 0 then
-            return requestAmmoRefill(tool, ammo) ~= false
-        end
-
-        return true
-    end
-
+    -- ─── Player helpers ───────────────────────────────────────────────────────
     local function samePlayer(a, b)
-        return a and b and tonumber(a.UserId) and tonumber(b.UserId) and tonumber(a.UserId) == tonumber(b.UserId)
+        return a and b and tonumber(a.UserId) ~= nil and tonumber(a.UserId) == tonumber(b.UserId)
+    end
+
+    local function isFriendly(player)
+        local env = (getgenv and getgenv()) or _G
+        local lib = env and (env.Library or _G.Library)
+        if not lib or type(lib.get_priority) ~= "function" then return false end
+        local ok, p = pcall(lib.get_priority, lib, player)
+        return ok and tostring(p or ""):lower() == "friendly"
     end
 
     local function getKillTarget(player)
-        if not player or samePlayer(player, lp) or isFriendlyWhitelisted(player) then
-            return nil, false
-        end
-
-        local character = player.Character
-        local humanoid = character and (character:FindFirstChild("Humanoid") or character:FindFirstChildOfClass("Humanoid"))
-        local bodyEffects = character and character:FindFirstChild("BodyEffects")
-        local knocked = bodyEffects and bodyEffects:FindFirstChild("K.O")
-        local valid = humanoid and tonumber(humanoid.Health) and humanoid.Health > 0 and not (knocked and knocked.Value)
-
-        return character, valid == true
-    end
-
-    local function getKillTargetName(player)
-        return player and tostring(player.Name or ("#" .. tostring(player.UserId))) or "none"
-    end
-
-    local function setKillTargetInputValue(value)
-        S.killTargetInput = tostring(value or "")
-        if handles.killTargetName then
-            pcall(function()
-                handles.killTargetName.Value = S.killTargetInput
-            end)
-        end
-    end
-
-    local function setKillTarget(player)
-        if player and not samePlayer(player, lp) then
-            S.killTargetUserId = tonumber(player.UserId)
-            S.killTargetName = getKillTargetName(player)
-            setKillTargetInputValue(S.killTargetName)
-            S.killAllStatus = "target " .. tostring(S.killTargetName)
-            return true
-        end
-
-        S.killTargetUserId = nil
-        S.killTargetName = "none"
-        setKillTargetInputValue("")
-        return false
-    end
-
-    local function clearKillTarget()
-        S.killTargetUserId = nil
-        S.killTargetName = "none"
-        setKillTargetInputValue("")
-        S.killAllStatus = "target cleared"
-        return true
-    end
-
-    local function findKillPlayerByName(query)
-        if not Players then
-            return nil
-        end
-
-        query = string.lower(tostring(query or ""):match("^%s*(.-)%s*$"))
-        if query == "" or query == "none" then
-            return nil
-        end
-
-        local partial
-        for _, player in ipairs(Players:GetPlayers()) do
-            if not samePlayer(player, lp) then
-                local name = string.lower(tostring(player.Name or ""))
-                if name == query then
-                    return player
-                end
-                if not partial and string.find(name, query, 1, true) then
-                    partial = player
-                end
-            end
-        end
-
-        return partial
-    end
-
-    local function getSelectedKillPlayer()
-        if not Players then
-            return nil
-        end
-
-        local selectedUserId = tonumber(S.killTargetUserId)
-        local selectedName = tostring((S.killTargetInput and S.killTargetInput ~= "" and S.killTargetInput) or S.killTargetName or "")
-        for _, player in ipairs(Players:GetPlayers()) do
-            if not samePlayer(player, lp) then
-                if selectedUserId and tonumber(player.UserId) == selectedUserId then
-                    return player
-                end
-                if selectedName ~= "" and selectedName ~= "none" and string.lower(tostring(player.Name or "")) == string.lower(selectedName) then
-                    return player
-                end
-            end
-        end
-
-        return findKillPlayerByName(selectedName)
+        if not player or samePlayer(player, lp) or isFriendly(player) then return nil, false end
+        local char = player.Character
+        local hum  = char and (char:FindFirstChild("Humanoid") or char:FindFirstChildOfClass("Humanoid"))
+        local be   = char and char:FindFirstChild("BodyEffects")
+        local ko   = be and be:FindFirstChild("K.O")
+        local valid = hum and tonumber(hum.Health) and hum.Health > 0 and not (ko and ko.Value)
+        return char, valid == true
     end
 
     local function getKillCandidates()
-        if not Players then
-            return nil
-        end
-
-        local root = getRoot()
-        local candidates = {}
-        for _, player in ipairs(Players:GetPlayers()) do
-            if not samePlayer(player, lp) and not isFriendlyWhitelisted(player) then
-                candidates[#candidates + 1] = player
+        local root   = getRoot()
+        local result = {}
+        for _, p in ipairs(Players:GetPlayers()) do
+            if not samePlayer(p, lp) and not isFriendly(p) then
+                result[#result + 1] = p
             end
         end
-
-        if root and #candidates > 1 then
-            table.sort(candidates, function(a, b)
-                local ca = a.Character
-                local cb = b.Character
+        if root and #result > 1 then
+            table.sort(result, function(a, b)
+                local ca, cb = a.Character, b.Character
                 local ra = ca and ca:FindFirstChild("HumanoidRootPart")
                 local rb = cb and cb:FindFirstChild("HumanoidRootPart")
                 if not ra then return false end
@@ -686,1635 +116,670 @@ local function boot()
                 return (ra.Position - root.Position).Magnitude < (rb.Position - root.Position).Magnitude
             end)
         end
-
-        return candidates
-    end
-
-    local function selectKillTargetStep(step)
-        local candidates = getKillCandidates()
-        if not candidates then
-            S.killAllStatus = "players missing"
-            return false
-        end
-
-        if #candidates == 0 then
-            clearKillTarget()
-            S.killAllStatus = "no targets"
-            return false
-        end
-
-        local selectedUserId = tonumber(S.killTargetUserId)
-        local index = 1
-        if selectedUserId then
-            for i, player in ipairs(candidates) do
-                if tonumber(player.UserId) == selectedUserId then
-                    index = i + (tonumber(step) or 1)
-                    break
-                end
-            end
-        end
-
-        while index > #candidates do
-            index = index - #candidates
-        end
-        while index < 1 do
-            index = index + #candidates
-        end
-
-        return setKillTarget(candidates[index])
-    end
-
-    local function selectNextKillTarget()
-        return selectKillTargetStep(1)
-    end
-
-    local function selectPreviousKillTarget()
-        return selectKillTargetStep(-1)
-    end
-
-    local function scrollKillTarget(direction)
-        if tick() - lastTargetScrollAt < SCROLL_TARGET_DELAY then
-            return false
-        end
-
-        lastTargetScrollAt = tick()
-        if tonumber(direction) and tonumber(direction) < 0 then
-            return selectPreviousKillTarget()
-        end
-
-        return selectNextKillTarget()
-    end
-
-    local function getEquippedTool(character)
-        if not character then
-            return nil
-        end
-
-        for _, item in ipairs(character:GetChildren()) do
-            if item.ClassName == "Tool" then
-                return item
-            end
-        end
-
-        return nil
-    end
-
-    local function equipKillTool(tool, character, humanoid)
-        if not tool or not character then
-            return false
-        end
-        if tool.Parent == character then
-            return true
-        end
-
-        local equipped = false
-        if humanoid then
-            equipped = pcall(function()
-                humanoid:EquipTool(tool)
-            end)
-        end
-        if not equipped then
-            equipped = pcall(function()
-                tool.Parent = character
-            end)
-        end
-
-        if equipped then
-            task.wait(KILL_EQUIP_DELAY)
-        end
-
-        return tool.Parent == character
-    end
-
-    local function restoreKillTool(tool, previousTool, character, backpack, wasEquipped)
-        if wasEquipped then
-            return
-        end
-
-        local humanoid = getHumanoid()
-        if previousTool and previousTool.Parent == character then
-            return
-        end
-        if previousTool and previousTool.Parent == backpack and humanoid then
-            local restored = pcall(function()
-                humanoid:EquipTool(previousTool)
-            end)
-            if restored then
-                task.wait(0.05)
-                return
-            end
-        end
-
-        if humanoid then
-            pcall(function()
-                humanoid:UnequipTools()
-            end)
-            task.wait(0.03)
-        end
-
-        if tool and backpack and tool.Parent == character then
-            pcall(function()
-                tool.Parent = backpack
-            end)
-        end
-    end
-
-    local function buildKillPellets(targetPlayers)
-        local pellets = {}
-        local targetCount = 0
-
-        for _, player in ipairs(targetPlayers or {}) do
-            local targetCharacter, valid = getKillTarget(player)
-            local head = targetCharacter and targetCharacter:FindFirstChild("Head")
-            if valid and head then
-                targetCount = targetCount + 1
-                local position = head.Position
-                for _ = 1, KILL_PELLETS_PER_TARGET do
-                    local jx = (math.random() - 0.5) * 0.5
-                    local jy = (math.random() - 0.5) * 0.5
-                    local jz = (math.random() - 0.5) * 0.5
-                    local jittered = position + Vector3.new(jx, jy, jz)
-                    pellets[#pellets + 1] = {
-                        AimPosition = jittered,
-                        Result1 = jittered,
-                        Result2 = head,
-                        Result3 = Vector3.yAxis
-                    }
-                end
-            end
-        end
-
-        return pellets, targetCount
-    end
-
-    local function runKillPlayers(targetPlayers, label)
-        local now = tick()
-        if now - (S.lastKillAllAt or 0) < S.killAllCooldown then
-            S.killAllStatus = "cooldown"
-            return false
-        end
-
-        S.lastKillAllAt = now
-        local remote = resolveKillAllRemotes()
-        local backpack, character = getGunContainers()
-
-        if not remote then
-            S.killAllStatus = "kill remote missing"
-            return false
-        end
-
-        if not character or not backpack then
-            S.killAllStatus = "character missing"
-            return false
-        end
-
-        local tool = getTacticalShotgun(character, backpack)
-        if not tool then
-            requestLoadout()
-            S.killAllStatus = "tactical requested"
-            return false
-        end
-
-        local handle = tool:FindFirstChild("Handle")
-        local ammo = tool:FindFirstChild("Ammo")
-        if ammo and (tonumber(ammo.Value) or 0) <= 0 then
-            local refilledTool = requestAmmoRefill(tool, ammo)
-            if refilledTool then
-                tool = refilledTool
-                handle = tool:FindFirstChild("Handle")
-                ammo = tool:FindFirstChild("Ammo")
-            end
-        end
-
-        if not handle or not usableAmmo(tool, ammo) then
-            S.killAllStatus = not handle and "handle missing" or "ammo refill requested"
-            return false
-        end
-
-        local pellets, targetCount = buildKillPellets(targetPlayers)
-
-        if #pellets == 0 then
-            S.killAllStatus = label and (label .. ": no targets") or "no targets"
-            return false
-        end
-
-        local rangeObject = tool:FindFirstChild("Range")
-        local damageObject = tool:FindFirstChild("Damage")
-        local range = rangeObject and (tonumber(rangeObject.Value) or 200) or 200
-        local damage = damageObject and (tonumber(damageObject.Value) or 50) or 50
-        local wasEquipped = tool.Parent == character
-        local previousTool = wasEquipped and nil or getEquippedTool(character)
-        local humanoid = getHumanoid()
-
-        if not equipKillTool(tool, character, humanoid) then
-            S.killAllStatus = "equip failed"
-            return false
-        end
-
-        handle = tool:FindFirstChild("Handle")
-        if not handle then
-            restoreKillTool(tool, previousTool, character, backpack, wasEquipped)
-            S.killAllStatus = "handle missing"
-            return false
-        end
-
-        local fired = 0
-        for shot = 1, KILL_SHOT_BURST do
-            handle = tool:FindFirstChild("Handle")
-            if not handle then
-                break
-            end
-            local shotPellets = shot == 1 and pellets or buildKillPellets(targetPlayers)
-            if #shotPellets == 0 then
-                break
-            end
-            local okFire = pcall(function()
-                remote:FireServer("ShootGun", handle, handle.Position, shotPellets, nil, nil, nil, range, damage)
-            end)
-            if okFire then
-                fired = fired + 1
-            end
-            if shot < KILL_SHOT_BURST then
-                task.wait(KILL_SHOT_DELAY)
-            end
-        end
-
-        restoreKillTool(tool, previousTool, character, backpack, wasEquipped)
-
-        S.killAllStatus = (label and (label .. ": ") or "") .. "fired " .. tostring(fired) .. "x / " .. tostring(targetCount) .. " target(s)"
-        return fired > 0
-    end
-
-    local function killPlayers(targetPlayers, label, _isRetry)
-        if S.killInProgress and not _isRetry then
-            S.killAllStatus = "already firing"
-            return false
-        end
-
-        if not _isRetry then S.killInProgress = true end
-        local ok, result = pcall(function()
-            return runKillPlayers(targetPlayers, label)
-        end)
-        if not _isRetry then S.killInProgress = false end
-
-        if not ok then
-            S.killAllStatus = "kill error"
-            return false
-        end
-
-        if result and not _isRetry then
-            local retryTargets = targetPlayers
-            local retryLabel = label
-            task.spawn(function()
-                task.wait(0.35)
-                if S.killInProgress then return end
-                local survivors = {}
-                for _, player in ipairs(retryTargets or {}) do
-                    local _, valid = getKillTarget(player)
-                    if valid then survivors[#survivors + 1] = player end
-                end
-                if #survivors > 0 then
-                    S.lastKillAllAt = 0
-                    S.killInProgress = true
-                    pcall(function()
-                        runKillPlayers(survivors, retryLabel and (retryLabel .. "-r") or "retry")
-                    end)
-                    S.killInProgress = false
-                end
-            end)
-        end
-
         return result
     end
 
-    local function killAll()
-        return killPlayers(Players and Players:GetPlayers() or {}, "all")
-    end
-
-    local function killSelectedTarget()
-        local player = getSelectedKillPlayer()
-        if not player then
-            S.killAllStatus = "target missing"
-            return false
-        end
-
-        return killPlayers({ player }, getKillTargetName(player))
-    end
-
-    local function killNamedTarget(name)
-        local player = type(name) == "string" and findKillPlayerByName(name) or name
-        if not player then
-            S.killAllStatus = "target missing"
-            return false
-        end
-
-        setKillTarget(player)
-        return killPlayers({ player }, getKillTargetName(player))
-    end
-
-    local function selectNearestKillTarget()
-        local candidates = getKillCandidates()
-        if not candidates or #candidates == 0 then
-            S.killAllStatus = "no targets"
-            return false
-        end
-        for _, player in ipairs(candidates) do
-            local _, valid = getKillTarget(player)
-            if valid then
-                return setKillTarget(player)
+    local function findPlayerByName(query)
+        query = string.lower(tostring(query or ""):match("^%s*(.-)%s*$"))
+        if query == "" or query == "none" then return nil end
+        local partial
+        for _, p in ipairs(Players:GetPlayers()) do
+            if not samePlayer(p, lp) then
+                local n = string.lower(p.Name)
+                if n == query then return p end
+                if not partial and string.find(n, query, 1, true) then partial = p end
             end
+        end
+        return partial
+    end
+
+    local function getSelectedPlayer()
+        local uid  = tonumber(S.killTargetUserId)
+        local name = string.lower(tostring(S.killTargetInput ~= "" and S.killTargetInput or S.killTargetName or ""))
+        for _, p in ipairs(Players:GetPlayers()) do
+            if not samePlayer(p, lp) then
+                if uid and tonumber(p.UserId) == uid then return p end
+                if name ~= "" and name ~= "none" and string.lower(p.Name) == name then return p end
+            end
+        end
+        return findPlayerByName(S.killTargetInput ~= "" and S.killTargetInput or S.killTargetName)
+    end
+
+    local function setKillTarget(player)
+        if player and not samePlayer(player, lp) then
+            S.killTargetUserId = tonumber(player.UserId)
+            S.killTargetName   = tostring(player.Name)
+            S.killTargetInput  = tostring(player.Name)
+            S.killAllStatus    = "target " .. player.Name
+            if handles.targetBox then pcall(function() handles.targetBox.Value = player.Name end) end
+            return true
+        end
+        S.killTargetUserId = nil
+        S.killTargetName   = "none"
+        S.killTargetInput  = ""
+        if handles.targetBox then pcall(function() handles.targetBox.Value = "" end) end
+        return false
+    end
+
+    local function selectNearest()
+        for _, p in ipairs(getKillCandidates()) do
+            local _, valid = getKillTarget(p)
+            if valid then return setKillTarget(p) end
         end
         S.killAllStatus = "no living targets"
         return false
     end
 
+    local function selectStep(step)
+        local candidates = getKillCandidates()
+        if #candidates == 0 then S.killAllStatus = "no targets" return false end
+        local uid = tonumber(S.killTargetUserId)
+        local idx = 1
+        if uid then
+            for i, p in ipairs(candidates) do
+                if tonumber(p.UserId) == uid then idx = i + step break end
+            end
+        end
+        while idx > #candidates do idx = idx - #candidates end
+        while idx < 1 do idx = idx + #candidates end
+        return setKillTarget(candidates[idx])
+    end
+
     local function autoRetargetIfDead()
         if not S.killTargetUserId then return end
-        local player = getSelectedKillPlayer()
-        local _, valid = getKillTarget(player)
+        local p = getSelectedPlayer()
+        local _, valid = getKillTarget(p)
         if not valid then
-            local changed = selectNearestKillTarget()
-            if changed then
-                notifyUser("Auto re-target", tostring(S.killTargetName), "info")
+            local changed = selectNearest()
+            if changed then notify("Auto re-target", S.killTargetName, "info") end
+        end
+    end
+
+    -- ─── Remotes ──────────────────────────────────────────────────────────────
+    local killRemote, loadoutRemote
+    local refillActive = false
+
+    local function isRemote(o) return o and o.ClassName == "RemoteEvent" end
+
+    local function findKillRemote()
+        local rs = game:GetService("ReplicatedStorage")
+        local gr = rs:FindFirstChild("GameRemotes")
+        local mr = rs:FindFirstChild("MainRemotes")
+        local exact = (gr and gr:FindFirstChild("MainGameEvent")) or (mr and mr:FindFirstChild("MainRemoteEvent"))
+        if isRemote(exact) then return exact end
+        local ok, desc = pcall(function() return rs:GetDescendants() end)
+        if not ok then return nil end
+        local fallback
+        for _, o in ipairs(desc) do
+            if isRemote(o) then
+                fallback = fallback or o
+                local n = string.lower(o.Name)
+                if string.find(n, "main", 1, true) or string.find(n, "game", 1, true) then return o end
             end
         end
+        return fallback
     end
 
-    local function killAllExceptSelected()
-        local selectedUserId = tonumber(S.killTargetUserId)
-        local targets = {}
-        for _, player in ipairs(Players and Players:GetPlayers() or {}) do
-            if not samePlayer(player, lp) and not isFriendlyWhitelisted(player) then
-                if not selectedUserId or tonumber(player.UserId) ~= selectedUserId then
-                    targets[#targets + 1] = player
-                end
-            end
+    local function findLoadoutRemote()
+        local rs = game:GetService("ReplicatedStorage")
+        local exact = rs:FindFirstChild("Loadout")
+        if isRemote(exact) then return exact end
+        local rem = rs:FindFirstChild("Remotes")
+        exact = rem and rem:FindFirstChild("Loadout")
+        if isRemote(exact) then return exact end
+        local ok, desc = pcall(function() return rs:GetDescendants() end)
+        if not ok then return nil end
+        for _, o in ipairs(desc) do
+            if isRemote(o) and string.find(string.lower(o.Name), "loadout", 1, true) then return o end
         end
-        if #targets == 0 then
-            S.killAllStatus = "no targets"
-            return false
-        end
-        return killPlayers(targets, "all-except")
-    end
-
-    local ARMOR_FALLBACK_POSITIONS = {
-        Vector3.new(528, 50, -637)
-    }
-
-    local function useNearestPosition(root, currentItem, currentPosition, candidateItem, candidatePosition)
-        if not root or not candidatePosition then
-            return currentItem, currentPosition
-        end
-
-        if not currentPosition or (candidatePosition - root.Position).Magnitude < (currentPosition - root.Position).Magnitude then
-            return candidateItem, candidatePosition
-        end
-
-        return currentItem, currentPosition
-    end
-
-    local function findNearestArmorStand(root)
-        if not root then
-            return nil
-        end
-
-        local bestItem, bestPosition
-        local ignored = workspace and workspace:FindFirstChild("Ignored")
-        local shop = ignored and ignored:FindFirstChild("Shop")
-        if shop then
-            for _, item in ipairs(shop:GetChildren()) do
-                if item.Name and string.find(string.lower(item.Name), "full armor", 1, true) then
-                    local head = item:FindFirstChild("Head")
-                    local price = item:FindFirstChild("Price")
-                    local target = head or price
-                    if target then
-                        bestItem, bestPosition = useNearestPosition(root, bestItem, bestPosition, item, target.Position)
-                    end
-                end
-            end
-        end
-
-        for _, position in ipairs(ARMOR_FALLBACK_POSITIONS) do
-            bestItem, bestPosition = useNearestPosition(root, bestItem, bestPosition, "known armor stand", position)
-        end
-
-        return bestItem, bestPosition
-    end
-
-    local function buyArmor(force)
-        if S.armorBuying or (not force and not S.autoArmor) or not S.running then
-            return false
-        end
-
-        local armor, maxArmor = getArmorState()
-        if not armor or not maxArmor or maxArmor <= 0 then
-            S.armorStatus = "armor stat missing"
-            return false
-        end
-
-        if not force and armor >= maxArmor * S.armorTriggerRatio then
-            S.armorStatus = tostring(math.floor(armor)) .. "/" .. tostring(math.floor(maxArmor))
-            return false
-        end
-
-        if not force and tick() - (S.lastArmorBuyAt or 0) < S.armorCooldown then
-            return false
-        end
-
-        local root = getRoot()
-        if not root then
-            S.armorStatus = "root missing"
-            return false
-        end
-
-        local item, armorPosition = findNearestArmorStand(root)
-        if not item or not armorPosition then
-            S.armorStatus = "armor stand missing"
-            return false
-        end
-
-        S.armorBuying = true
-        S.lastArmorBuyAt = tick()
-        S.armorStatus = "click armor now"
-
-        local beforeArmor = armor
-        local oldCFrame = root.CFrame
-        local oldVelocity = root.AssemblyLinearVelocity
-        local oldCanCollide = root.CanCollide
-        local camera = workspace.CurrentCamera
-        local oldCamera = camera and camera.CFrame
-
-        local offset = root.Position - armorPosition
-        local flat = Vector3.new(offset.X, 0, offset.Z)
-        if flat.Magnitude < 1 then
-            flat = Vector3.new(0, 0, 1)
-        end
-        local side = flat.Unit * 5
-        local standPos = Vector3.new(armorPosition.X + side.X, armorPosition.Y, armorPosition.Z + side.Z)
-
-        pcall(function()
-            local moved = pcall(function()
-                root.CFrame = CFrame.lookAt(standPos, armorPosition)
-            end)
-            if not moved then
-                root.Position = standPos
-            end
-            root.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
-            root.CanCollide = true
-            if camera then
-                camera.CFrame = CFrame.lookAt(armorPosition + flat.Unit * 9 + Vector3.new(0, 2, 0), armorPosition)
-            end
-        end)
-
-        local bought = false
-        local deadline = tick() + 7
-        while S.running and (force or S.autoArmor) and tick() < deadline do
-            local afterArmor = getArmorState()
-            if afterArmor and beforeArmor and afterArmor > beforeArmor then
-                bought = true
-                S.armorStatus = tostring(math.floor(afterArmor)) .. "/" .. tostring(math.floor(maxArmor))
-                break
-            end
-            task.wait(0.15)
-        end
-
-        root = getRoot()
-        if root then
-            pcall(function()
-                root.CFrame = oldCFrame
-                root.AssemblyLinearVelocity = oldVelocity
-                root.CanCollide = oldCanCollide
-            end)
-        end
-        if camera and oldCamera then
-            pcall(function()
-                camera.CFrame = oldCamera
-            end)
-        end
-
-        if not bought then
-            S.armorStatus = "manual click timeout"
-        end
-
-        S.armorBuying = false
-        return bought
-    end
-    local function syncUi()
-        if handles.height and handles.height.Set then pcall(function() handles.height:Set(S.height) end) end
-        if handles.rate and handles.rate.Set then pcall(function() handles.rate:Set(S.rate) end) end
-        if handles.velocity and handles.velocity.Set then pcall(function() handles.velocity:Set(S.velocity) end) end
-        if handles.returnHeight and handles.returnHeight.Set then pcall(function() handles.returnHeight:Set(S.returnHeight) end) end
-        if handles.roamRadius and handles.roamRadius.Set then pcall(function() handles.roamRadius:Set(S.roamRadius) end) end
-        if handles.roamSpeed and handles.roamSpeed.Set then pcall(function() handles.roamSpeed:Set(S.roamSpeed) end) end
-        if handles.aimHoldTime and handles.aimHoldTime.Set then pcall(function() handles.aimHoldTime:Set(S.aimHoldTime) end) end
-        if handles.armorCooldown and handles.armorCooldown.Set then pcall(function() handles.armorCooldown:Set(S.armorCooldown) end) end
-        if handles.armorTriggerRatio and handles.armorTriggerRatio.Set then pcall(function() handles.armorTriggerRatio:Set(S.armorTriggerRatio) end) end
-        if handles.killAllCooldown and handles.killAllCooldown.Set then pcall(function() handles.killAllCooldown:Set(S.killAllCooldown) end) end
-        if handles.killTargetName then pcall(function() handles.killTargetName.Value = S.killTargetInput or "" end) end
-        if handles.resetKey then pcall(function() handles.resetKey.Value = S.resetKey or "F" end) end
-
-        if handles.autoKillInterval and handles.autoKillInterval.Set then pcall(function() handles.autoKillInterval:Set(S.autoKillInterval) end) end
-        if handles.killOnSightRange and handles.killOnSightRange.Set then pcall(function() handles.killOnSightRange:Set(S.killOnSightRange) end) end
-        if roamToggle and roamToggle.Set then pcall(function() roamToggle:Set(S.roam) end) end
-        if overlayToggle and overlayToggle.Set then pcall(function() overlayToggle:Set(S.showOverlay) end) end
-        if autoArmorToggle and autoArmorToggle.Set then pcall(function() autoArmorToggle:Set(S.autoArmor) end) end
-        if autoKillTargetToggle and autoKillTargetToggle.Set then pcall(function() autoKillTargetToggle:Set(S.autoKillTarget) end) end
-        if autoKillAllToggle and autoKillAllToggle.Set then pcall(function() autoKillAllToggle:Set(S.autoKillAll) end) end
-        if killOnSightToggle and killOnSightToggle.Set then pcall(function() killOnSightToggle:Set(S.killOnSight) end) end
-        if autoRetargetToggle and autoRetargetToggle.Set then pcall(function() autoRetargetToggle:Set(S.autoRetarget) end) end
-    end
-
-    local function setEnabled(on, syncToggle)
-        local wanted = on and true or false
-        if S.enabled == wanted then
-            return
-        end
-
-        S.enabled = wanted
-        local root = getRoot()
-
-        if S.enabled then
-            if root then
-                S.anchorX = root.Position.X
-                S.anchorY = root.Position.Y
-                S.anchorZ = root.Position.Z
-            end
-            notifyUser("Better Void", "enabled", "success")
-        else
-            if root then
-                pcall(function()
-                    if S.anchorX and S.anchorY and S.anchorZ then
-                        root.CFrame = CFrame.new(S.anchorX, S.anchorY + S.returnHeight, S.anchorZ)
-                    end
-                    root.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
-                    root.CanCollide = true
-                end)
-            end
-
-            S.anchorX = nil
-            S.anchorY = nil
-            S.anchorZ = nil
-            notifyUser("Better Void", "disabled", "warning")
-        end
-
-        if syncToggle ~= false and toggle and toggle.Set and not syncingToggle then
-            syncingToggle = true
-            pcall(function()
-                toggle:Set(S.enabled)
-            end)
-            syncingToggle = false
-        end
-    end
-
-    local function panic()
-        setEnabled(false, true)
-        S.roam = false
-        S.autoKillTarget = false
-        S.autoKillAll = false
-        S.killOnSight = false
-        if roamToggle and roamToggle.Set then pcall(function() roamToggle:Set(false) end) end
-        if autoKillTargetToggle and autoKillTargetToggle.Set then pcall(function() autoKillTargetToggle:Set(false) end) end
-        if autoKillAllToggle and autoKillAllToggle.Set then pcall(function() autoKillAllToggle:Set(false) end) end
-        if killOnSightToggle and killOnSightToggle.Set then pcall(function() killOnSightToggle:Set(false) end) end
-
-        local root = getRoot()
-        if root then
-            pcall(function()
-                root.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
-                root.CanCollide = true
-            end)
-        end
-
-        notifyUser("Better Void", "panic stopped", "warning")
-    end
-
-    local function getCharacterHumanoid(char)
-        if not char then
-            return nil
-        end
-
-        local hum = nil
-        pcall(function()
-            hum = char:FindFirstChildOfClass("Humanoid")
-        end)
-        return hum or char:FindFirstChild("Humanoid")
-    end
-
-    local function getCharacterRoot(char)
-        return char and (char:FindFirstChild("HumanoidRootPart") or char:FindFirstChild("UpperTorso") or char:FindFirstChild("Torso"))
-    end
-
-    local function characterStillAlive(char)
-        if not char or not lp or lp.Character ~= char then
-            return false
-        end
-
-        local hum = getCharacterHumanoid(char)
-        if not hum then
-            return true
-        end
-
-        local health = tonumber(hum.Health)
-        return health == nil or health > 0
-    end
-
-    local function requestResetPulse(char)
-        local hum = getCharacterHumanoid(char)
-        local root = getCharacterRoot(char)
-
-        if hum then
-            pcall(function()
-                if hum.UnequipTools then
-                    hum:UnequipTools()
-                end
-            end)
-            pcall(function()
-                hum.BreakJointsOnDeath = true
-            end)
-            pcall(function()
-                if Enum and Enum.HumanoidStateType and hum.SetStateEnabled then
-                    hum:SetStateEnabled(Enum.HumanoidStateType.Dead, true)
-                end
-            end)
-            pcall(function()
-                hum.Health = 0
-            end)
-            pcall(function()
-                if hum.TakeDamage then
-                    hum:TakeDamage(1000000000)
-                end
-            end)
-            pcall(function()
-                if Enum and Enum.HumanoidStateType and hum.ChangeState then
-                    hum:ChangeState(Enum.HumanoidStateType.Dead)
-                end
-            end)
-        end
-
-        if char then
-            pcall(function()
-                char:BreakJoints()
-            end)
-        end
-
-        if root then
-            pcall(function()
-                root.AssemblyLinearVelocity = Vector3.new(0, -2500, 0)
-                root.CanCollide = false
-                root.CFrame = CFrame.new(root.Position.X, root.Position.Y - 1000, root.Position.Z)
-            end)
-        end
-    end
-
-    local function forceReset()
-        if S.resetActive then
-            notifyUser("Force reset", "already resetting", "warning")
-            return false
-        end
-
-        panic()
-
-        local char = lp and lp.Character
-        if not char then
-            notifyUser("Force reset", "character missing", "error")
-            return false
-        end
-
-        S.resetActive = true
-        notifyUser("Force reset", "reset requested", "warning")
-
-        task.spawn(function()
-            local deadline = tick() + 1.25
-            local reset = false
-
-            while S.running and tick() < deadline do
-                if not characterStillAlive(char) then
-                    reset = true
-                    break
-                end
-
-                requestResetPulse(char)
-                task.wait(0.08)
-            end
-
-            if not reset and not characterStillAlive(char) then
-                reset = true
-            end
-
-            S.resetActive = false
-            notifyUser("Force reset", reset and "respawn triggered" or "reset did not take", reset and "success" or "error")
-        end)
-
-        return true
-    end
-
-    local function saveReturnMarker()
-        local root = getRoot()
-        if not root then
-            notifyUser("Return marker", "character root missing", "error")
-            return false
-        end
-
-        S.returnX = root.Position.X
-        S.returnY = root.Position.Y
-        S.returnZ = root.Position.Z
-        S.hasReturnMarker = true
-        saveConfig()
-        notifyUser("Return marker", "saved", "success")
-        return true
-    end
-
-    local function returnToMarker()
-        if not S.hasReturnMarker then
-            notifyUser("Return marker", "no marker saved", "warning")
-            return false
-        end
-
-        local root = getRoot()
-        if not root then
-            notifyUser("Return marker", "character root missing", "error")
-            return false
-        end
-
-        setEnabled(false, true)
-        pcall(function()
-            root.CFrame = CFrame.new(S.returnX, S.returnY + S.returnHeight, S.returnZ)
-            root.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
-            root.CanCollide = true
-        end)
-        notifyUser("Return marker", "returned", "success")
-        return true
-    end
-
-    local PRESETS = {
-        ["Above map"] = { height = 100000, rate = 0.08, velocity = 1200, roam = false, roamRadius = 900, roamSpeed = 100000, aimStabilizer = true, aimHoldTime = 0.75 },
-        ["Wide roam"] = { height = 100000, rate = 0.08, velocity = 1350, roam = true, roamRadius = 1400, roamSpeed = 100000, aimStabilizer = true, aimHoldTime = 0.75 },
-        ["High sky"] = { height = 100000, rate = 0.06, velocity = 1800, roam = true, roamRadius = 1800, roamSpeed = 100000, aimStabilizer = true, aimHoldTime = 0.75 },
-        ["Fast circle"] = { height = 100000, rate = 0.05, velocity = 1600, roam = true, roamRadius = 800, roamSpeed = 100000, aimStabilizer = true, aimHoldTime = 0.75 }
-    }
-
-    local function applyPreset(name)
-        local preset = PRESETS[name]
-        if not preset then
-            return false
-        end
-
-        for key, value in pairs(preset) do
-            S[key] = value
-        end
-        clampSettings()
-        syncUi()
-        notifyUser("Preset", name, "success")
-        return true
-    end
-
-    function S.setEnabled(on) setEnabled(on, true) end
-    function S.toggle() setEnabled(not S.enabled, true) end
-    function S.setRoam(on)
-        S.roam = on and true or false
-        notifyUser("Better Void", S.roam and "roam enabled" or "roam disabled", S.roam and "success" or "warning")
-    end
-    function S.toggleRoam() S.setRoam(not S.roam) end
-    function S.setAimStabilizer(on)
-        S.aimStabilizer = on and true or false
-        notifyUser("Better Void", S.aimStabilizer and "aim stabilizer enabled" or "aim stabilizer disabled", S.aimStabilizer and "success" or "warning")
-    end
-    function S.toggleAimStabilizer() S.setAimStabilizer(not S.aimStabilizer) end
-    function S.setAutoArmor(on)
-        S.autoArmor = on and true or false
-        S.armorStatus = S.autoArmor and "watching" or "idle"
-        notifyUser("Armor assist", S.autoArmor and "enabled" or "disabled", S.autoArmor and "success" or "warning")
-    end
-    function S.toggleAutoArmor()
-        S.setAutoArmor(not S.autoArmor)
-        if autoArmorToggle and autoArmorToggle.Set then pcall(function() autoArmorToggle:Set(S.autoArmor) end) end
-    end
-    function S.killAll() return killAll() end
-    function S.killAllExceptSelected() return killAllExceptSelected() end
-    function S.nextKillTarget() return selectNextKillTarget() end
-    function S.previousKillTarget() return selectPreviousKillTarget() end
-    function S.selectNearestKillTarget() return selectNearestKillTarget() end
-    function S.openPeopleFinder() return openPeopleFinder() end
-    function S.clearKillTarget() return clearKillTarget() end
-    function S.setKillTarget(target)
-        if type(target) == "string" then
-            return setKillTarget(findKillPlayerByName(target))
-        end
-        return setKillTarget(target)
-    end
-    function S.killSelectedTarget() return killSelectedTarget() end
-    function S.killTarget(target) return killNamedTarget(target) end
-    function S.setAutoKillTarget(on)
-        S.autoKillTarget = on and true or false
-        if autoKillTargetToggle and autoKillTargetToggle.Set then pcall(function() autoKillTargetToggle:Set(S.autoKillTarget) end) end
-    end
-    function S.setAutoKillAll(on)
-        S.autoKillAll = on and true or false
-        if autoKillAllToggle and autoKillAllToggle.Set then pcall(function() autoKillAllToggle:Set(S.autoKillAll) end) end
-    end
-    function S.setKillOnSight(on)
-        S.killOnSight = on and true or false
-        if killOnSightToggle and killOnSightToggle.Set then pcall(function() killOnSightToggle:Set(S.killOnSight) end) end
-    end
-    function S.buyArmor() return buyArmor(true) end
-    function S.panic() panic() end
-    function S.forceReset() return forceReset() end
-    function S.saveReturnMarker() return saveReturnMarker() end
-    function S.returnToMarker() return returnToMarker() end
-    function S.saveConfig()
-        local ok, err = saveConfig()
-        notifyUser("Config", ok and "saved" or ("save failed: " .. tostring(err)), ok and "success" or "error")
-        return ok, err
-    end
-    function S.loadConfig()
-        local ok, err = loadConfig()
-        if ok then syncUi() end
-        notifyUser("Config", ok and "loaded" or ("load failed: " .. tostring(err)), ok and "success" or "error")
-        return ok, err
-    end
-    function S.applyPreset(name) return applyPreset(name) end
-
-    local loadedConfig = loadConfig()
-
-    local function removeOverlay()
-        for _, item in pairs(overlay.items) do
-            pcall(function()
-                item:Remove()
-            end)
-        end
-        overlay.items = {}
-    end
-
-    local function setupOverlay()
-        if not Drawing then
-            return
-        end
-
-        local ok = pcall(function()
-            local bg = Drawing.new("Square")
-            bg.Filled = true
-            bg.Color = Color3.fromRGB(10, 10, 10)
-            bg.Transparency = 0.72
-            bg.Position = Vector2.new(12, 120)
-            bg.Size = Vector2.new(260, 126)
-            bg.Visible = false
-
-            local text = Drawing.new("Text")
-            text.Size = 13
-            text.Center = false
-            text.Outline = true
-            text.Color = Color3.fromRGB(235, 240, 255)
-            text.Position = Vector2.new(20, 128)
-            text.Visible = false
-
-            local radar = Drawing.new("Circle")
-            radar.Filled = false
-            radar.Thickness = 1
-            radar.NumSides = 64
-            radar.Color = Color3.fromRGB(80, 170, 255)
-            radar.Transparency = 0.6
-            radar.Position = Vector2.new(196, 174)
-            radar.Radius = 36
-            radar.Visible = false
-
-            local dot = Drawing.new("Circle")
-            dot.Filled = true
-            dot.NumSides = 16
-            dot.Color = Color3.fromRGB(120, 255, 170)
-            dot.Position = Vector2.new(196, 174)
-            dot.Radius = 4
-            dot.Visible = false
-
-            overlay.items.bg = bg
-            overlay.items.text = text
-            overlay.items.radar = radar
-            overlay.items.dot = dot
-        end)
-
-        if not ok then
-            removeOverlay()
-            return
-        end
-
-        task.spawn(function()
-            while S.running do
-                local shown = S.showOverlay == true
-                local root = getRoot()
-                local bg = overlay.items.bg
-                local text = overlay.items.text
-                local radar = overlay.items.radar
-                local dot = overlay.items.dot
-
-                if bg and text and radar and dot then
-                    bg.Visible = shown
-                    text.Visible = shown
-                    radar.Visible = shown
-                    dot.Visible = shown
-
-                    if shown then
-                        local pos = root and root.Position
-                        local x = pos and math.floor(pos.X) or 0
-                        local y = pos and math.floor(pos.Y) or 0
-                        local z = pos and math.floor(pos.Z) or 0
-                        text.Text = "Better Void\nVoid: " .. (S.enabled and "ON" or "OFF") .. "  Roam: " .. (S.roam and "ON" or "OFF") .. "\nKill: " .. tostring(S.killAllStatus) .. "\nXYZ: " .. x .. ", " .. y .. ", " .. z .. "\nMarker: " .. (S.hasReturnMarker and "saved" or "none")
-
-                        local dx = 0
-                        local dz = 0
-                        if root and S.anchorX and S.anchorZ then
-                            dx = root.Position.X - S.anchorX
-                            dz = root.Position.Z - S.anchorZ
-                        end
-
-                        local scale = math.max(100, S.roamRadius) / 32
-                        local px = math.max(-32, math.min(32, dx / scale))
-                        local pz = math.max(-32, math.min(32, dz / scale))
-                        dot.Position = Vector2.new(196 + px, 174 + pz)
-                    end
-                end
-
-                task.wait(0.1)
-            end
-        end)
-    end
-
-    function S.unload()
-        setEnabled(false, false)
-        S.running = false
-        removeOverlay()
-
-        if scrollConnection then
-            pcall(function()
-                scrollConnection:Disconnect()
-            end)
-            scrollConnection = nil
-        end
-        if hotkeyConnection then
-            pcall(function()
-                hotkeyConnection:Disconnect()
-            end)
-            hotkeyConnection = nil
-        end
-        destroyPeopleFinder()
-
-        if win then
-            pcall(function()
-                if win.Destroy then
-                    win:Destroy()
-                elseif win.Unload then
-                    win:Unload()
-                end
-            end)
-            win = nil
-        end
-
-        pcall(function()
-            if Lib and Lib.Destroy then
-                Lib:Destroy()
-            end
-        end)
-
-        _G.BetterVoid = nil
-    end
-
-    local function loadInsUi()
-        local ok, result = pcall(function()
-            return loadstring(game:HttpGet("https://raw.githubusercontent.com/neaxusxgod-png/INS-ui/main/uilib.min.lua"))()
-        end)
-
-        if ok then
-            return result or INSUI or INSui
-        end
-
-        warn("Better Void: INS-ui failed to load: " .. tostring(result))
         return nil
     end
 
-    local function setupKillTargetScroll()
-        if scrollConnection then
-            return true
-        end
-
-        local okService, userInput = pcall(function()
-            return game:GetService("UserInputService")
-        end)
-        if not okService or not userInput then
-            return false
-        end
-
-        local inputChanged
-        local okSignal = pcall(function()
-            inputChanged = userInput.InputChanged
-        end)
-        if not okSignal or not inputChanged or not inputChanged.Connect then
-            return false
-        end
-
-        local okConnect = pcall(function()
-            scrollConnection = inputChanged:Connect(function(input)
-                if not S.running then
-                    return
-                end
-
-                local isWheel = false
-                pcall(function()
-                    isWheel = Enum and Enum.UserInputType and input.UserInputType == Enum.UserInputType.MouseWheel
-                end)
-                if not isWheel then
-                    return
-                end
-
-                local wheel = 0
-                pcall(function()
-                    wheel = input.Position.Z
-                end)
-                if wheel == 0 then
-                    return
-                end
-
-                local okSelect = scrollKillTarget(wheel)
-                if okSelect then
-                    notifyUser("Kill target", tostring(S.killTargetName), "info")
-                end
-            end)
-        end)
-
-        if not okConnect then
-            scrollConnection = nil
-            return false
-        end
-
-        return true
+    local function resolveRemotes()
+        if not isRemote(killRemote)    then killRemote    = findKillRemote()    end
+        if not isRemote(loadoutRemote) then loadoutRemote = findLoadoutRemote() end
+        return killRemote, loadoutRemote
     end
 
-    local function keyMatches(input, keyName, fallbackCode)
-        if not input then
-            return false
-        end
-
-        local keyCode = nil
-        pcall(function()
-            keyCode = input.KeyCode
-        end)
-        if not keyCode then
-            return false
-        end
-
-        local enumKey = nil
-        pcall(function()
-            enumKey = Enum and Enum.KeyCode and Enum.KeyCode[keyName]
-        end)
-        if enumKey and keyCode == enumKey then
-            return true
-        end
-
-        local numeric = tonumber(keyCode)
-        if numeric and numeric == fallbackCode then
-            return true
-        end
-
-        local value = nil
-        pcall(function()
-            value = keyCode.Value
-        end)
-        if tonumber(value) == fallbackCode then
-            return true
-        end
-
-        local text = string.lower(tostring(keyCode))
-        local wanted = string.lower(tostring(keyName))
-        return text == wanted or string.sub(text, -#wanted) == wanted
+    local function instanceKey(o)
+        if not o then return "nil" end
+        local ok, v = pcall(function() return o.Address end)
+        if ok and v then return tostring(v) end
+        local ok2, v2 = pcall(function() return o:GetFullName() end)
+        return ok2 and v2 or tostring(o)
     end
 
-    local function textBoxFocused(userInput)
-        local focused = nil
-        pcall(function()
-            if userInput and userInput.GetFocusedTextBox then
-                focused = userInput:GetFocusedTextBox()
-            end
-        end)
-        return focused ~= nil
+    local function requestLoadout()
+        local _, remote = resolveRemotes()
+        if not remote then return false end
+        return pcall(function() remote:FireServer(LOADOUT) end)
     end
 
-    local function setupHotkeys()
-        if hotkeyConnection then
-            return true
-        end
-
-        local okService, userInput = pcall(function()
-            return game:GetService("UserInputService")
-        end)
-        if not okService or not userInput then
-            return false
-        end
-
-        local inputBegan
-        local okSignal = pcall(function()
-            inputBegan = userInput.InputBegan
-        end)
-        if not okSignal or not inputBegan or not inputBegan.Connect then
-            return false
-        end
-
-        local okConnect = pcall(function()
-            hotkeyConnection = inputBegan:Connect(function(input)
-                if not S.running or textBoxFocused(userInput) then
-                    return
-                end
-
-                if keyMatches(input, "V", 118) then
-                    setEnabled(not S.enabled, true)
-                elseif keyMatches(input, "K", KEY_KILL_ALL) then
-                    task.spawn(function() S.killAll() end)
-                elseif keyMatches(input, "L", KEY_KILL_SELECTED) then
-                    task.spawn(function() S.killSelectedTarget() end)
-                elseif keyMatches(input, S.resetKey or "F", pollCodeForKeyName(S.resetKey)) then
-                    forceReset()
-                end
-            end)
-        end)
-
-        if not okConnect then
-            hotkeyConnection = nil
-            return false
-        end
-
-        return true
+    local function getTacticalShotgun(char, bp)
+        return (bp and bp:FindFirstChild("[TacticalShotgun]")) or (char and char:FindFirstChild("[TacticalShotgun]"))
     end
 
-    function destroyPeopleFinder()
-        for _, button in ipairs(peopleFinderButtons) do
-            pcall(function()
-                if button.Destroy then
-                    button:Destroy()
-                elseif button.Remove then
-                    button:Remove()
-                elseif button.Unload then
-                    button:Unload()
-                end
-            end)
-        end
-        peopleFinderButtons = {}
-    end
+    local function requestAmmoRefill(tool, ammo)
+        local _, remote = resolveRemotes()
+        if not remote or refillActive or not tool or not ammo then return false end
+        local bp, char = getGunContainers()
+        if not bp then return false end
 
-    function openPeopleFinder()
-        if not handles.peopleFinderSection or not handles.peopleFinderSection.Button then
-            S.killAllStatus = "finder section missing"
-            notifyUser("Find people", "open the Instant Kill tab first", "warning")
-            return false
-        end
-
-        if not Players then
-            S.killAllStatus = "players missing"
-            notifyUser("Find people", "players missing", "warning")
-            return false
-        end
-
-        destroyPeopleFinder()
-
-        local query = string.lower(tostring(S.killTargetInput or ""):match("^%s*(.-)%s*$"))
-        local shown = 0
-        for _, player in ipairs(Players:GetPlayers()) do
-            if shown >= 32 then
-                break
-            end
-            if not samePlayer(player, lp) then
-                local displayName = ""
-                pcall(function()
-                    displayName = tostring(player.DisplayName or "")
-                end)
-                local name = tostring(player.Name or "")
-                local label = name
-                if displayName ~= "" and displayName ~= name then
-                    label = name .. " (" .. displayName .. ")"
-                end
-
-                local haystack = string.lower(label)
-                if query == "" or string.find(haystack, query, 1, true) then
-                    local targetPlayer = player
-                    local okButton, button = pcall(function()
-                        return handles.peopleFinderSection:Button(label, function()
-                            setKillTarget(targetPlayer)
-                            notifyUser("Kill target", tostring(S.killTargetName), "success")
-                        end)
-                    end)
-                    if okButton and button then
-                        peopleFinderButtons[#peopleFinderButtons + 1] = button
+        refillActive = true
+        local reqName    = tool.Name
+        local oldTools   = {}
+        local equippedTools = {}
+        for _, c in ipairs({ bp, char }) do
+            if c then
+                for _, item in ipairs(c:GetChildren()) do
+                    if item.ClassName == "Tool" and GUN_NAMES[item.Name] then
+                        oldTools[instanceKey(item)] = item
+                        if item.Parent == char then equippedTools[item.Name] = true end
                     end
-                    shown = shown + 1
                 end
             end
         end
 
-        S.killAllStatus = shown > 0 and ("finder listed " .. tostring(shown)) or "finder no matches"
-        notifyUser("Find people", tostring(S.killAllStatus), shown > 0 and "success" or "warning")
-        return shown > 0
-    end
+        pcall(function() remote:FireServer(LOADOUT) end)
 
-    local function createUi()
-        Lib = loadInsUi()
-        if not Lib or not Lib.CreateWindow then
-            notifyUser("BetterVoid", "no UI — V=void K=kill L=target", "warning")
-            return false
-        end
-
-        win = Lib:CreateWindow({
-            title = "BetterVoid",
-            subtitle = "void · combat · auto",
-            size = Vector2.new(640, 460),
-            position = Vector2.new(56, 56),
-            menuKey = "p",
-            theme = { accent = Color3.fromRGB(210, 35, 35) },
-            accentA = Color3.fromRGB(210, 35, 35),
-            accentB = Color3.fromRGB(255, 80, 20),
-            font = "Proxima",
-            opacity = 0.97,
-            rounding = 2,
-            rowLines = true,
-            checkboxStyle = true,
-            keybindOverlay = true,
-            backgroundEffect = "Dots",
-            backgroundEffectColor = Color3.fromRGB(180, 30, 30),
-            autoSave = false,
-            smartFps = true,
-            gameInput = false,
-            startOpen = true
-        })
-
-        if win.AddSettingsTab then win:AddSettingsTab("cog") end
-
-        local voidTab   = win:Tab("Void",   "shield")
-        local combatTab = win:Tab("Combat", "target")
-        local autoTab   = win:Tab("Auto",   "bolt")
-        local cfgTab    = win:Tab("Config", "gear")
-
-        -- VOID TAB
-        local moveSection = voidTab:Section("Flight",          "Left",  "void movement controls")
-        local roamSection = voidTab:Section("Roam",            "Left",  "map movement pattern")
-        local aimSection  = voidTab:Section("Aim Assist",      "Left",  "stabilizer while shooting")
-        local voidStatus  = voidTab:Section("Live Status",     "Right", "real-time values")
-
-        toggle = moveSection:Toggle("Void enabled [V]", false, function(on)
-            if syncingToggle then return end
-            setEnabled(on, false)
-        end)
-        if toggle and toggle.AddKeybind then toggle:AddKeybind("v", "Toggle") end
-
-        handles.height       = moveSection:Slider("Height",        S.height,       1000, 100,  100000, " studs", function(v) S.height = math.floor(v) end)
-        handles.velocity     = moveSection:Slider("Up velocity",   S.velocity,     100,  500,  5000,   "",        function(v) S.velocity = math.floor(v) end)
-        handles.rate         = moveSection:Slider("Tick rate",     S.rate,         0.01, 0.03, 0.5,    "s",       function(v) S.rate = math.max(0.03, v) end)
-        handles.returnHeight = moveSection:Slider("Return height", S.returnHeight, 1,    0,    50,     " studs",  function(v) S.returnHeight = math.floor(v) end)
-
-        roamToggle         = roamSection:Toggle("Map roam", S.roam, function(on) S.roam = on and true or false end)
-        handles.roamRadius = roamSection:Slider("Radius", S.roamRadius, 50,   100, 5000,   " studs", function(v) S.roamRadius = math.floor(v) end)
-        handles.roamSpeed  = roamSection:Slider("Speed",  S.roamSpeed,  1000, 0.1, 100000, "",        function(v) S.roamSpeed = math.max(0.1, math.min(100000, v)) end)
-
-        aimSection:Toggle("Aim stabilizer", S.aimStabilizer, function(on) S.aimStabilizer = on and true or false end)
-        handles.aimHoldTime = aimSection:Slider("Hold time", S.aimHoldTime, 0.05, 0.05, 3, "s", function(v) S.aimHoldTime = math.max(0.05, math.min(3, v)) end)
-        overlayToggle = aimSection:Toggle("Position overlay", S.showOverlay, function(on) S.showOverlay = on and true or false end)
-
-        voidStatus:Label(function() return "Void:     " .. (S.enabled and "ON" or "OFF") end)
-        voidStatus:Label(function() return "Roam:     " .. (S.roam and "ON" or "OFF") end)
-        voidStatus:Label(function() return "Height:   " .. tostring(S.height) end)
-        voidStatus:Label(function() return "Velocity: " .. tostring(S.velocity) end)
-        voidStatus:Label(function() return "Rate:     " .. tostring(S.rate) .. "s" end)
-        voidStatus:Label(function()
-            local root = getRoot()
-            return "Y pos:    " .. (root and tostring(math.floor(root.Position.Y)) or "—")
-        end)
-        voidStatus:Label(function() return "Marker:   " .. (S.hasReturnMarker and "saved" or "none") end)
-        voidStatus:Info("V = void | P = menu | scroll = cycle targets")
-
-        -- COMBAT TAB
-        local targetSection = combatTab:Section("Target",        "Left",  "who to kill")
-        local fireSection   = combatTab:Section("Fire",          "Left",  "execute kills")
-        handles.peopleFinderSection = combatTab:Section("People Finder", "Right", "browse players")
-        local combatStatus  = combatTab:Section("Kill Status",   "Right", "live feedback")
-
-        handles.killTargetName = targetSection:Textbox("Target name", S.killTargetInput or "", function(value)
-            local text = tostring(value or ""):match("^%s*(.-)%s*$")
-            setKillTargetInputValue(text)
-            if text == "" then
-                S.killTargetUserId = nil
-                S.killTargetName = "none"
-                S.killAllStatus = "target cleared"
-                return
-            end
-            local player = findKillPlayerByName(text)
-            if player then
-                S.killTargetUserId = tonumber(player.UserId)
-                S.killTargetName = getKillTargetName(player)
-                S.killAllStatus = "target " .. tostring(S.killTargetName)
-            else
-                S.killTargetUserId = nil
-                S.killTargetName = text
-                S.killAllStatus = "target typed"
-            end
-        end, "Exact or partial name")
-
-        targetSection:Button("Select nearest", function()
-            local ok = selectNearestKillTarget()
-            notifyUser("Target", ok and tostring(S.killTargetName) or tostring(S.killAllStatus), ok and "success" or "warning")
-        end)
-        targetSection:Button("Previous target", function()
-            local ok = selectPreviousKillTarget()
-            notifyUser("Target", ok and tostring(S.killTargetName) or tostring(S.killAllStatus), ok and "success" or "warning")
-        end)
-        targetSection:Button("Next target", function()
-            local ok = selectNextKillTarget()
-            notifyUser("Target", ok and tostring(S.killTargetName) or tostring(S.killAllStatus), ok and "success" or "warning")
-        end)
-        targetSection:Button("Clear target", function()
-            clearKillTarget()
-            notifyUser("Target", "cleared", "info")
-        end)
-        targetSection:Button("Open people finder", function() openPeopleFinder() end)
-
-        handles.killAllCooldown = fireSection:Slider("Cooldown", S.killAllCooldown, 0.1, 0.3, 10, "s", function(v)
-            S.killAllCooldown = math.max(0.3, math.min(10, v))
-        end)
-        fireSection:Button("Kill selected [L]", function()
-            task.spawn(function()
-                local ok = killSelectedTarget()
-                notifyUser("Kill", tostring(S.killAllStatus), ok and "success" or "warning")
-            end)
-        end):SetRisk()
-        fireSection:Button("Kill all [K]", function()
-            task.spawn(function()
-                local ok = killAll()
-                notifyUser("Kill all", tostring(S.killAllStatus), ok and "success" or "warning")
-            end)
-        end):SetRisk()
-        fireSection:Button("Kill all except selected", function()
-            task.spawn(function()
-                local ok = killAllExceptSelected()
-                notifyUser("Kill except", tostring(S.killAllStatus), ok and "success" or "warning")
-            end)
-        end):SetRisk()
-
-        handles.peopleFinderSection:Button("Refresh list", function() openPeopleFinder() end)
-        handles.peopleFinderSection:Info("Type name above to filter. Click player to select.")
-
-        combatStatus:Label(function() return "Target: " .. tostring(S.killTargetName or "none") end)
-        combatStatus:Label(function() return "Status: " .. tostring(S.killAllStatus) end)
-        combatStatus:Label(function()
-            local p = getSelectedKillPlayer()
-            if not p then return "Health: —" end
-            local char = p.Character
-            local hum = char and char:FindFirstChildOfClass("Humanoid")
-            if not hum then return "Health: —" end
-            local hp  = math.floor(tonumber(hum.Health) or 0)
-            local max = math.floor(tonumber(hum.MaxHealth) or 100)
-            return "Health: " .. hp .. " / " .. max
-        end)
-        combatStatus:Label(function()
-            local armor, maxArmor = getArmorState()
-            return "Armor:  " .. (armor and (tostring(math.floor(armor)) .. "/" .. tostring(math.floor(maxArmor or 0))) or "—")
-        end)
-        combatStatus:Info("K = kill all | L = kill selected | scroll = cycle")
-
-        -- AUTO TAB
-        local autoKillSection  = autoTab:Section("Auto Kill",    "Left",  "automated killing")
-        local autoArmorSection = autoTab:Section("Armor Assist", "Left",  "auto buy armor")
-        local autoStatus       = autoTab:Section("Auto Status",  "Right", "automation state")
-
-        autoKillTargetToggle = autoKillSection:Toggle("Auto kill selected", S.autoKillTarget, function(on)
-            S.autoKillTarget = on and true or false
-            if on then S.autoKillAll = false; S.killOnSight = false end
-            if autoKillAllToggle and autoKillAllToggle.Set then pcall(function() autoKillAllToggle:Set(S.autoKillAll) end) end
-            if killOnSightToggle and killOnSightToggle.Set then pcall(function() killOnSightToggle:Set(S.killOnSight) end) end
-        end)
-        autoKillAllToggle = autoKillSection:Toggle("Auto kill all", S.autoKillAll, function(on)
-            S.autoKillAll = on and true or false
-            if on then S.autoKillTarget = false; S.killOnSight = false end
-            if autoKillTargetToggle and autoKillTargetToggle.Set then pcall(function() autoKillTargetToggle:Set(S.autoKillTarget) end) end
-            if killOnSightToggle and killOnSightToggle.Set then pcall(function() killOnSightToggle:Set(S.killOnSight) end) end
-        end)
-        killOnSightToggle = autoKillSection:Toggle("Kill on sight", S.killOnSight, function(on)
-            S.killOnSight = on and true or false
-            if on then S.autoKillTarget = false; S.autoKillAll = false end
-            if autoKillTargetToggle and autoKillTargetToggle.Set then pcall(function() autoKillTargetToggle:Set(S.autoKillTarget) end) end
-            if autoKillAllToggle and autoKillAllToggle.Set then pcall(function() autoKillAllToggle:Set(S.autoKillAll) end) end
-        end)
-        autoRetargetToggle = autoKillSection:Toggle("Auto re-target on death", S.autoRetarget, function(on)
-            S.autoRetarget = on and true or false
-        end)
-        handles.autoKillInterval  = autoKillSection:Slider("Kill interval", S.autoKillInterval,  0.5, 0.5,  30,   "s",      function(v) S.autoKillInterval = math.max(0.5, math.min(30, v)) end)
-        handles.killOnSightRange  = autoKillSection:Slider("Sight range",   S.killOnSightRange,  50,  50,   5000, " studs", function(v) S.killOnSightRange = math.floor(v) end)
-
-        autoArmorToggle = autoArmorSection:Toggle("Auto armor assist", S.autoArmor, function(on) S.setAutoArmor(on) end)
-        handles.armorCooldown      = autoArmorSection:Slider("Check cooldown", S.armorCooldown,     1,    2,   60,  "s",  function(v) S.armorCooldown = math.floor(v) end)
-        handles.armorTriggerRatio  = autoArmorSection:Slider("Buy below",      S.armorTriggerRatio, 0.05, 0.1, 1,   "",   function(v) S.armorTriggerRatio = math.max(0.1, math.min(1, v)) end)
-        autoArmorSection:Button("Buy armor now", function()
-            task.spawn(function()
-                local wasAuto = S.autoArmor
-                S.autoArmor = true
-                local ok = buyArmor(true)
-                S.autoArmor = wasAuto
-                notifyUser("Armor", ok and "bought" or tostring(S.armorStatus), ok and "success" or "warning")
-            end)
-        end)
-
-        autoStatus:Label(function()
-            local mode = S.killOnSight and "Kill on sight" or S.autoKillAll and "Kill all" or S.autoKillTarget and "Kill target" or "Off"
-            return "Mode:     " .. mode
-        end)
-        autoStatus:Label(function() return "Interval: " .. tostring(S.autoKillInterval) .. "s" end)
-        autoStatus:Label(function() return "Range:    " .. tostring(S.killOnSightRange) .. " studs" end)
-        autoStatus:Label(function() return "Retarget: " .. (S.autoRetarget and "ON" or "OFF") end)
-        autoStatus:Label(function() return "Armor:    " .. (S.autoArmor and "ON" or "OFF") end)
-        autoStatus:Label(function()
-            local armor, maxArmor = getArmorState()
-            return "Armor HP: " .. (armor and (tostring(math.floor(armor)) .. "/" .. tostring(math.floor(maxArmor or 0))) or tostring(S.armorStatus))
-        end)
-
-        -- CONFIG TAB
-        local presetSection = cfgTab:Section("Presets",        "Left",  "void movement presets")
-        local markerSection = cfgTab:Section("Return Marker",  "Left",  "save/return position")
-        local sysSection    = cfgTab:Section("System",         "Left",  "config, reset, unload")
-
-        presetSection:Button("Above map",   function() applyPreset("Above map") end)
-        presetSection:Button("Wide roam",   function() applyPreset("Wide roam") end)
-        presetSection:Button("High sky",    function() applyPreset("High sky") end)
-        presetSection:Button("Fast circle", function() applyPreset("Fast circle") end)
-
-        markerSection:Button("Save marker",      function() saveReturnMarker() end)
-        markerSection:Button("Return to marker", function() returnToMarker() end)
-        markerSection:Label(function() return "Marker: " .. (S.hasReturnMarker and "saved" or "none") end)
-
-        sysSection:Button("Save config", function()
-            local ok, err = saveConfig()
-            notifyUser("Config", ok and "saved" or ("failed: " .. tostring(err)), ok and "success" or "error")
-        end)
-        sysSection:Button("Load config", function()
-            local ok, err = loadConfig()
-            if ok then syncUi() end
-            notifyUser("Config", ok and "loaded" or ("failed: " .. tostring(err)), ok and "success" or "error")
-        end)
-        handles.resetKey = sysSection:Textbox("Force reset key", S.resetKey or "F", function(value)
-            local key = normalizeKeyName(value, "F")
-            if key == "V" or key == "K" or key == "L" then
-                notifyUser("Reset key", "V K L are reserved", "warning")
-                key = S.resetKey or "F"
-            end
-            S.resetKey = key
-            if handles.resetKey then pcall(function() handles.resetKey.Value = S.resetKey end) end
-            notifyUser("Reset key", "set to " .. tostring(S.resetKey), "success")
-        end, "Example: F")
-        sysSection:Button("Force reset self", function() forceReset() end):SetRisk()
-        sysSection:Button("Panic stop",       function() panic() end):SetRisk()
-        sysSection:Button("Unload",           function() S.unload() end):SetRisk()
-
-        syncUi()
-        notifyUser("BetterVoid", "loaded — P=menu V=void K=kill L=target", "success")
-        return true
-    end
-
-    clampSettings()
-    setupOverlay()
-    createUi()
-    setupKillTargetScroll()
-    local hasInputHotkeys = setupHotkeys()
-
-    if loadedConfig then
-        notifyUser("Config", "loaded", "success")
-    end
-
-    task.spawn(function()
-        while S.running do
-            if S.enabled and not S.armorBuying then
-                local root = getRoot()
-                if root then
-                    if not S.anchorX or not S.anchorY or not S.anchorZ then
-                        S.anchorX = root.Position.X
-                        S.anchorY = root.Position.Y
-                        S.anchorZ = root.Position.Z
-                    end
-
-                    local aiming = S.aimStabilizer and ((ismouse1pressed and ismouse1pressed()) or (ismouse2pressed and ismouse2pressed()))
-                    if aiming then
-                        S.aimHoldUntil = tick() + S.aimHoldTime
-                        if not S.aimLockX or not S.aimLockY or not S.aimLockZ then
-                            S.aimLockX = root.Position.X
-                            S.aimLockY = root.Position.Y
-                            S.aimLockZ = root.Position.Z
-                        end
-                    elseif tick() >= S.aimHoldUntil then
-                        S.aimLockX = nil
-                        S.aimLockY = nil
-                        S.aimLockZ = nil
-                    end
-
-                    local holdingAim = S.aimStabilizer and tick() < S.aimHoldUntil and S.aimLockX ~= nil and S.aimLockY ~= nil and S.aimLockZ ~= nil
-                    local offsetX = 0
-                    local offsetZ = 0
-
-                    if holdingAim then
-                        S.lastThreatName = "aim hold"
-                        S.lastThreatDistance = 0
-                    else
-                        if S.roam then
-                            local phase = tick() * S.roamSpeed
-                            offsetX = (math.cos(phase) * S.roamRadius) + (math.sin(phase * 1.7) * S.roamRadius * 0.35)
-                            offsetZ = (math.sin(phase) * S.roamRadius) + (math.cos(phase * 1.3) * S.roamRadius * 0.35)
+        local newest  = {}
+        local deadline = tick() + 2
+        while S.running and tick() < deadline do
+            for _, c in ipairs({ bp, char }) do
+                if c then
+                    for _, item in ipairs(c:GetChildren()) do
+                        if item.ClassName == "Tool" and GUN_NAMES[item.Name] and not oldTools[instanceKey(item)] then
+                            newest[item.Name] = item
                         end
                     end
-
-                    pcall(function()
-                        local targetX = holdingAim and S.aimLockX or (S.anchorX + offsetX)
-                        local targetY = holdingAim and S.aimLockY or (S.anchorY + S.height)
-                        local targetZ = holdingAim and S.aimLockZ or (S.anchorZ + offsetZ)
-                        root.CFrame = CFrame.new(targetX, targetY, targetZ)
-                        root.AssemblyLinearVelocity = holdingAim and Vector3.new(0, 0, 0) or Vector3.new(0, S.velocity, 0)
-                        root.CanCollide = holdingAim or false
-                        S.currentX = targetX
-                        S.currentY = targetY
-                        S.currentZ = targetZ
-                    end)
-                    S.lastMoveAt = tick()
-                    task.wait(S.rate)
-                else
-                    task.wait(0.15)
                 end
-            else
-                task.wait(0.15)
+            end
+            if next(newest) then break end
+            task.wait(0.05)
+        end
+
+        local hum = getHumanoid()
+        for name, item in pairs(newest) do
+            if equippedTools[name] and char and item.Parent then
+                local ok = hum and pcall(function() hum:EquipTool(item) end)
+                if not ok then pcall(function() item.Parent = char end) end
             end
         end
-    end)
 
-    task.spawn(function()
-        while S.running do
-            if S.autoArmor then
-                buyArmor()
-                task.wait(math.max(3, S.armorCooldown or 8))
-            else
-                task.wait(0.25)
+        refillActive = false
+        return newest[reqName] or false
+    end
+
+    -- ─── Kill core ────────────────────────────────────────────────────────────
+    local function buildPellets(targetPlayers)
+        local pellets, count = {}, 0
+        for _, p in ipairs(targetPlayers or {}) do
+            local char, valid = getKillTarget(p)
+            local head = char and char:FindFirstChild("Head")
+            if valid and head then
+                count = count + 1
+                local pos = head.Position
+                for _ = 1, PELLETS_PER_TARGET do
+                    local j = Vector3.new((math.random() - 0.5) * 0.5, (math.random() - 0.5) * 0.5, (math.random() - 0.5) * 0.5)
+                    local jp = pos + j
+                    pellets[#pellets + 1] = { AimPosition = jp, Result1 = jp, Result2 = head, Result3 = Vector3.yAxis }
+                end
             end
         end
-    end)
+        return pellets, count
+    end
 
-    task.spawn(function()
-        local keyState = {}
-        local function pressed(code)
-            local down = iskeypressed and iskeypressed(code)
-            local once = down and not keyState[code]
-            keyState[code] = down
-            return once
+    local function runKill(targetPlayers, label)
+        local now = tick()
+        if now - S.lastKillAllAt < S.killAllCooldown then
+            S.killAllStatus = "cooldown"
+            return false
+        end
+        S.lastKillAllAt = now
+
+        local remote = resolveRemotes()
+        local bp, char = getGunContainers()
+        if not remote  then S.killAllStatus = "remote missing"    return false end
+        if not char or not bp then S.killAllStatus = "character missing" return false end
+
+        local tool = getTacticalShotgun(char, bp)
+        if not tool then
+            requestLoadout()
+            S.killAllStatus = "loadout requested"
+            return false
         end
 
-        while S.running do
-            if not hasInputHotkeys then
-                if pressed(118) then setEnabled(not S.enabled, true) end
-                if pressed(KEY_KILL_ALL) then task.spawn(function() S.killAll() end) end
-                if pressed(KEY_KILL_SELECTED) then task.spawn(function() S.killSelectedTarget() end) end
-                local resetCode = pollCodeForKeyName(S.resetKey)
-                if resetCode and pressed(resetCode) then forceReset() end
+        local handle = tool:FindFirstChild("Handle")
+        local ammo   = tool:FindFirstChild("Ammo")
+        if ammo and (tonumber(ammo.Value) or 0) <= 0 then
+            local refilled = requestAmmoRefill(tool, ammo)
+            if refilled then
+                tool   = refilled
+                handle = tool:FindFirstChild("Handle")
+                ammo   = tool:FindFirstChild("Ammo")
             end
-            task.wait(0.03)
         end
-    end)
 
+        if not handle then S.killAllStatus = "handle missing" return false end
+        if ammo and (tonumber(ammo.Value) or 0) <= 0 then S.killAllStatus = "no ammo" return false end
+
+        local rangeObj = tool:FindFirstChild("Range")
+        local dmgObj   = tool:FindFirstChild("Damage")
+        local range    = rangeObj and (tonumber(rangeObj.Value) or 200) or 200
+        local damage   = dmgObj   and (tonumber(dmgObj.Value)   or 50)  or 50
+
+        local wasEquipped = tool.Parent == char
+        local prevTool
+        if not wasEquipped then
+            for _, item in ipairs(char:GetChildren()) do
+                if item.ClassName == "Tool" then prevTool = item break end
+            end
+        end
+
+        local hum = getHumanoid()
+        if not wasEquipped then
+            local ok = hum and pcall(function() hum:EquipTool(tool) end)
+            if not ok then pcall(function() tool.Parent = char end) end
+            task.wait(EQUIP_DELAY)
+        end
+
+        handle = tool:FindFirstChild("Handle")
+        if not handle then S.killAllStatus = "handle lost" return false end
+
+        local pellets, targetCount = buildPellets(targetPlayers)
+        if #pellets == 0 then
+            S.killAllStatus = (label or "") .. ": no targets"
+            return false
+        end
+
+        local fired = 0
+        for shot = 1, SHOT_BURST do
+            handle = tool:FindFirstChild("Handle")
+            if not handle then break end
+            local shotPellets = shot == 1 and pellets or buildPellets(targetPlayers)
+            if #shotPellets == 0 then break end
+            local ok = pcall(function()
+                remote:FireServer("ShootGun", handle, handle.Position, shotPellets, nil, nil, nil, range, damage)
+            end)
+            if ok then fired = fired + 1 end
+            if shot < SHOT_BURST then task.wait(SHOT_DELAY) end
+        end
+
+        if not wasEquipped then
+            if prevTool and prevTool.Parent == bp and hum then
+                pcall(function() hum:EquipTool(prevTool) end)
+                task.wait(0.05)
+            elseif hum then
+                pcall(function() hum:UnequipTools() end)
+                task.wait(0.03)
+            end
+            if tool.Parent == char then pcall(function() tool.Parent = bp end) end
+        end
+
+        S.killAllStatus = (label and label .. ": " or "") .. "fired " .. fired .. "x / " .. targetCount .. " target(s)"
+        return fired > 0
+    end
+
+    local function killPlayers(targetPlayers, label, _retry)
+        if S.killInProgress and not _retry then
+            S.killAllStatus = "already firing"
+            return false
+        end
+        if not _retry then S.killInProgress = true end
+        local ok, result = pcall(function() return runKill(targetPlayers, label) end)
+        if not _retry then S.killInProgress = false end
+        if not ok then S.killAllStatus = "kill error" return false end
+
+        if result and not _retry then
+            local rt, rl = targetPlayers, label
+            task.spawn(function()
+                task.wait(0.35)
+                if S.killInProgress then return end
+                local survivors = {}
+                for _, p in ipairs(rt or {}) do
+                    local _, valid = getKillTarget(p)
+                    if valid then survivors[#survivors + 1] = p end
+                end
+                if #survivors > 0 then
+                    S.lastKillAllAt  = 0
+                    S.killInProgress = true
+                    pcall(function() runKill(survivors, rl and (rl .. "-r") or "retry") end)
+                    S.killInProgress = false
+                end
+            end)
+        end
+        return result
+    end
+
+    local function killAll()
+        return killPlayers(Players:GetPlayers(), "all")
+    end
+
+    local function killSelected()
+        local p = getSelectedPlayer()
+        if not p then S.killAllStatus = "target missing" return false end
+        return killPlayers({ p }, p.Name)
+    end
+
+    local function killAllExcept()
+        local uid = tonumber(S.killTargetUserId)
+        local targets = {}
+        for _, p in ipairs(Players:GetPlayers()) do
+            if not samePlayer(p, lp) and not isFriendly(p) then
+                if not uid or tonumber(p.UserId) ~= uid then
+                    targets[#targets + 1] = p
+                end
+            end
+        end
+        if #targets == 0 then S.killAllStatus = "no targets" return false end
+        return killPlayers(targets, "except")
+    end
+
+    -- ─── Auto kill loop ───────────────────────────────────────────────────────
     task.spawn(function()
         local lastAutoAt = 0
         while S.running do
             local now = tick()
-            if (S.killOnSight or S.autoKillAll or S.autoKillTarget) and (now - lastAutoAt >= S.autoKillInterval) then
-                lastAutoAt = now
+            if (S.killOnSight or S.autoKillAll or S.autoKillTarget) and now - lastAutoAt >= S.autoKillInterval then
+                lastAutoAt   = now
                 S.lastKillAllAt = 0
 
                 if S.killOnSight then
                     local root = getRoot()
                     if root then
                         local inRange = {}
-                        for _, player in ipairs(Players and Players:GetPlayers() or {}) do
-                            if not samePlayer(player, lp) and not isFriendlyWhitelisted(player) then
-                                local char = player.Character
-                                local proot = char and char:FindFirstChild("HumanoidRootPart")
-                                if proot and (proot.Position - root.Position).Magnitude <= S.killOnSightRange then
-                                    local _, valid = getKillTarget(player)
-                                    if valid then inRange[#inRange + 1] = player end
+                        for _, p in ipairs(Players:GetPlayers()) do
+                            if not samePlayer(p, lp) and not isFriendly(p) then
+                                local pchar = p.Character
+                                local pr    = pchar and pchar:FindFirstChild("HumanoidRootPart")
+                                if pr and (pr.Position - root.Position).Magnitude <= S.killOnSightRange then
+                                    local _, valid = getKillTarget(p)
+                                    if valid then inRange[#inRange + 1] = p end
                                 end
                             end
                         end
-                        if #inRange > 0 then
-                            killPlayers(inRange, "sight")
-                        end
+                        if #inRange > 0 then killPlayers(inRange, "sight") end
                     end
                 elseif S.autoKillAll then
-                    killPlayers(Players and Players:GetPlayers() or {}, "auto-all")
+                    killPlayers(Players:GetPlayers(), "auto-all")
                 elseif S.autoKillTarget then
                     if S.autoRetarget then autoRetargetIfDead() end
-                    local player = getSelectedKillPlayer()
-                    if player then
-                        local _, valid = getKillTarget(player)
-                        if valid then
-                            killPlayers({ player }, "auto")
-                        end
+                    local p = getSelectedPlayer()
+                    if p then
+                        local _, valid = getKillTarget(p)
+                        if valid then killPlayers({ p }, "auto") end
                     end
                 end
             end
             task.wait(0.1)
         end
     end)
+
+    -- ─── Input ────────────────────────────────────────────────────────────────
+    local UIS         = game:GetService("UserInputService")
+    local scrollConn  = nil
+    local hotkeyConn  = nil
+    local lastScrollAt = 0
+
+    pcall(function()
+        scrollConn = UIS.InputChanged:Connect(function(input)
+            if not S.running then return end
+            local wheel = 0
+            pcall(function()
+                if input.UserInputType == Enum.UserInputType.MouseWheel then
+                    wheel = input.Position.Z
+                end
+            end)
+            if wheel == 0 then return end
+            if tick() - lastScrollAt < 0.12 then return end
+            lastScrollAt = tick()
+            local ok = selectStep(wheel < 0 and -1 or 1)
+            if ok then notify("Target", S.killTargetName, "info") end
+        end)
+    end)
+
+    pcall(function()
+        hotkeyConn = UIS.InputBegan:Connect(function(input, gp)
+            if not S.running or gp then return end
+            local focused = false
+            pcall(function() focused = UIS:GetFocusedTextBox() ~= nil end)
+            if focused then return end
+            pcall(function()
+                if input.KeyCode == Enum.KeyCode.K then
+                    task.spawn(killAll)
+                elseif input.KeyCode == Enum.KeyCode.L then
+                    task.spawn(killSelected)
+                end
+            end)
+        end)
+    end)
+
+    -- ─── People finder ────────────────────────────────────────────────────────
+    local function clearFinder()
+        for _, b in ipairs(finderButtons) do
+            pcall(function()
+                if b.Destroy then b:Destroy()
+                elseif b.Remove then b:Remove()
+                elseif b.Unload then b:Unload() end
+            end)
+        end
+        finderButtons = {}
+    end
+
+    local function openFinder()
+        if not handles.finderSection then return end
+        clearFinder()
+        local query = string.lower(tostring(S.killTargetInput or ""):match("^%s*(.-)%s*$"))
+        local shown = 0
+        for _, p in ipairs(Players:GetPlayers()) do
+            if shown >= 30 then break end
+            if not samePlayer(p, lp) then
+                local name = p.Name
+                local display = ""
+                pcall(function() display = tostring(p.DisplayName or "") end)
+                local label = (display ~= "" and display ~= name) and (name .. " (" .. display .. ")") or name
+                if query == "" or string.find(string.lower(label), query, 1, true) then
+                    local tp = p
+                    local ok, btn = pcall(function()
+                        return handles.finderSection:Button(label, function()
+                            setKillTarget(tp)
+                            notify("Target", S.killTargetName, "success")
+                        end)
+                    end)
+                    if ok and btn then finderButtons[#finderButtons + 1] = btn end
+                    shown = shown + 1
+                end
+            end
+        end
+        notify("People finder", shown > 0 and (shown .. " players") or "no matches", shown > 0 and "success" or "warning")
+    end
+
+    -- ─── UI ───────────────────────────────────────────────────────────────────
+    local function loadLib()
+        local ok, result = pcall(function()
+            return loadstring(game:HttpGet("https://raw.githubusercontent.com/neaxusxgod-png/INS-ui/main/uilib.min.lua"))()
+        end)
+        if ok then return result or INSUI or INSui end
+        warn("BetterVoid: UI lib failed: " .. tostring(result))
+        return nil
+    end
+
+    Lib = loadLib()
+
+    if not Lib or not Lib.CreateWindow then
+        notify("BetterVoid", "UI failed — K=kill all  L=kill selected", "warning")
+    else
+        win = Lib:CreateWindow({
+            title             = "Better Void",
+            subtitle          = "Instant Kill",
+            size              = Vector2.new(620, 430),
+            position          = Vector2.new(48, 48),
+            menuKey           = "p",
+            theme             = { accent = Color3.fromRGB(80, 170, 255) },
+            accentA           = Color3.fromRGB(80, 170, 255),
+            accentB           = Color3.fromRGB(180, 120, 255),
+            font              = "Proxima",
+            opacity           = 0.95,
+            rounding          = 1,
+            rowLines          = true,
+            checkboxStyle     = true,
+            keybindOverlay    = true,
+            backgroundEffect  = "Rain",
+            backgroundEffectColor = Color3.fromRGB(80, 170, 255),
+            autoSave          = false,
+            smartFps          = true,
+            gameInput         = false,
+            startOpen         = true,
+        })
+
+        if win.AddSettingsTab then win:AddSettingsTab("cog") end
+
+        local killTab = win:Tab("Instant Kill", "target")
+
+        local killControls = killTab:Section("Controls",      "Left",  "target and fire")
+        local killAuto     = killTab:Section("Auto Kill",     "Left",  "automated killing")
+        local killStatus   = killTab:Section("Status",        "Right", "live state")
+        handles.finderSection = killTab:Section("People Finder", "Right", "player list")
+
+        -- TARGET
+        killControls:Divider("Target")
+        handles.targetBox = killControls:Textbox("Target name", S.killTargetInput or "", function(value)
+            local text = tostring(value or ""):match("^%s*(.-)%s*$")
+            S.killTargetInput = text
+            if text == "" then
+                S.killTargetUserId = nil
+                S.killTargetName   = "none"
+                S.killAllStatus    = "target cleared"
+                return
+            end
+            local p = findPlayerByName(text)
+            if p then
+                S.killTargetUserId = tonumber(p.UserId)
+                S.killTargetName   = p.Name
+                S.killAllStatus    = "target " .. p.Name
+            else
+                S.killTargetUserId = nil
+                S.killTargetName   = text
+                S.killAllStatus    = "target typed"
+            end
+        end, "Exact or partial name")
+
+        killControls:Button("Select nearest", function()
+            local ok = selectNearest()
+            notify("Target", ok and S.killTargetName or S.killAllStatus, ok and "success" or "warning")
+        end)
+        killControls:Button("Previous target", function()
+            local ok = selectStep(-1)
+            notify("Target", ok and S.killTargetName or S.killAllStatus, ok and "success" or "warning")
+        end)
+        killControls:Button("Next target", function()
+            local ok = selectStep(1)
+            notify("Target", ok and S.killTargetName or S.killAllStatus, ok and "success" or "warning")
+        end)
+        killControls:Button("Clear target", function()
+            setKillTarget(nil)
+            S.killAllStatus = "cleared"
+            notify("Target", "cleared", "info")
+        end)
+        killControls:Button("Open people finder", function()
+            openFinder()
+        end)
+        handles.finderSection:Button("Refresh list", function()
+            openFinder()
+        end)
+        handles.finderSection:Info("Type name above to filter. Click player to select.")
+
+        -- FIRE
+        killControls:Divider("Fire")
+        handles.cooldownSlider = killControls:Slider("Cooldown", S.killAllCooldown, 0.1, 0.3, 10, "s", function(v)
+            S.killAllCooldown = math.max(0.3, math.min(10, v))
+        end)
+        killControls:Button("Kill selected [L]", function()
+            task.spawn(function()
+                local ok = killSelected()
+                notify("Kill", S.killAllStatus, ok and "success" or "warning")
+            end)
+        end):SetRisk()
+        killControls:Button("Kill all [K]", function()
+            task.spawn(function()
+                local ok = killAll()
+                notify("Kill all", S.killAllStatus, ok and "success" or "warning")
+            end)
+        end):SetRisk()
+        killControls:Button("Kill all except selected", function()
+            task.spawn(function()
+                local ok = killAllExcept()
+                notify("Kill except", S.killAllStatus, ok and "success" or "warning")
+            end)
+        end):SetRisk()
+
+        -- AUTO KILL
+        killAuto:Divider("Auto kill mode")
+        autoKillTargetToggle = killAuto:Toggle("Auto kill selected", S.autoKillTarget, function(on)
+            S.autoKillTarget = on and true or false
+            if on then S.autoKillAll = false; S.killOnSight = false end
+            if autoKillAllToggle   and autoKillAllToggle.Set   then pcall(function() autoKillAllToggle:Set(false) end) end
+            if killOnSightToggle   and killOnSightToggle.Set   then pcall(function() killOnSightToggle:Set(false) end) end
+        end)
+        autoKillAllToggle = killAuto:Toggle("Auto kill all", S.autoKillAll, function(on)
+            S.autoKillAll = on and true or false
+            if on then S.autoKillTarget = false; S.killOnSight = false end
+            if autoKillTargetToggle and autoKillTargetToggle.Set then pcall(function() autoKillTargetToggle:Set(false) end) end
+            if killOnSightToggle    and killOnSightToggle.Set    then pcall(function() killOnSightToggle:Set(false) end) end
+        end)
+        killOnSightToggle = killAuto:Toggle("Kill on sight", S.killOnSight, function(on)
+            S.killOnSight = on and true or false
+            if on then S.autoKillTarget = false; S.autoKillAll = false end
+            if autoKillTargetToggle and autoKillTargetToggle.Set then pcall(function() autoKillTargetToggle:Set(false) end) end
+            if autoKillAllToggle    and autoKillAllToggle.Set    then pcall(function() autoKillAllToggle:Set(false) end) end
+        end)
+        autoRetargetToggle = killAuto:Toggle("Auto re-target on death", S.autoRetarget, function(on)
+            S.autoRetarget = on and true or false
+        end)
+        killAuto:Slider("Kill interval", S.autoKillInterval, 0.5, 0.5, 30, "s", function(v)
+            S.autoKillInterval = math.max(0.5, math.min(30, v))
+        end)
+        killAuto:Slider("Sight range", S.killOnSightRange, 50, 50, 5000, " studs", function(v)
+            S.killOnSightRange = math.floor(v)
+        end)
+
+        -- STATUS
+        killStatus:Label(function() return "Target:   " .. tostring(S.killTargetName or "none") end)
+        killStatus:Label(function() return "Status:   " .. tostring(S.killAllStatus) end)
+        killStatus:Label(function()
+            local p = getSelectedPlayer()
+            if not p then return "HP:       —" end
+            local char = p.Character
+            local hum  = char and char:FindFirstChildOfClass("Humanoid")
+            if not hum then return "HP:       —" end
+            return "HP:       " .. math.floor(tonumber(hum.Health) or 0) .. "/" .. math.floor(tonumber(hum.MaxHealth) or 100)
+        end)
+        killStatus:Label(function()
+            local mode = S.killOnSight and "sight" or S.autoKillAll and "all" or S.autoKillTarget and "target" or "off"
+            return "Auto:     " .. mode
+        end)
+        killStatus:Label(function() return "Interval: " .. tostring(S.autoKillInterval) .. "s" end)
+        killStatus:Label(function() return "Range:    " .. tostring(S.killOnSightRange) .. " studs" end)
+        killStatus:Info("K = kill all  |  L = kill selected  |  scroll = cycle targets  |  P = menu")
+
+        notify("BetterVoid", "loaded — K=kill all  L=kill selected", "success")
+    end
+
+    -- ─── Unload ───────────────────────────────────────────────────────────────
+    S.unload = function()
+        S.running = false
+        clearFinder()
+        if scrollConn then pcall(function() scrollConn:Disconnect() end) scrollConn = nil end
+        if hotkeyConn then pcall(function() hotkeyConn:Disconnect() end) hotkeyConn = nil end
+        if win then
+            pcall(function()
+                if win.Destroy then win:Destroy()
+                elseif win.Unload then win:Unload() end
+            end)
+            win = nil
+        end
+        _G.BV = nil
+    end
 end
 
 task.spawn(boot)
