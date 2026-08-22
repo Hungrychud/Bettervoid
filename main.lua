@@ -14,6 +14,8 @@ local function boot()
     -- ─── State ───────────────────────────────────────────────────────────────
     local S = {
         running          = true,
+        killAllCooldown  = 0.8,
+        lastKillAllAt    = 0,
         autoKillInterval = 2.0,
         killOnSightRange = 500,
         autoKillTarget   = false,
@@ -31,9 +33,9 @@ local function boot()
     _G.BV = S
 
     -- ─── Kill constants ───────────────────────────────────────────────────────
-    local PELLETS_PER_TARGET = 5
-    local SHOT_BURST         = 2
-    local SHOT_DELAY         = 0.07
+    local PELLETS_PER_TARGET = 10
+    local SHOT_BURST         = 3
+    local SHOT_DELAY         = 0.065
     local EQUIP_DELAY        = 0.06
     local LOADOUT            = { "[Double-Barrel SG]", "[Revolver]", "[TacticalShotgun]", "None" }
     local GUN_NAMES          = { ["[Double-Barrel SG]"] = true, ["[Revolver]"] = true, ["[TacticalShotgun]"] = true }
@@ -196,157 +198,325 @@ local function boot()
     end
 
     -- ─── Remotes ──────────────────────────────────────────────────────────────
-    local killRemote = nil
+    -- Ported verbatim from the working backup instakill (maintt.lua).
+    local killAllRemote = nil
+    local loadoutRemote = nil
+    local refillActive  = false
+    local GUN_SET       = GUN_NAMES
 
     local function isRemote(o) return o and o.ClassName == "RemoteEvent" end
 
-    local function resolveRemotes()
-        if isRemote(killRemote) then return killRemote end
-        local rs = game:GetService("ReplicatedStorage")
-        local gr = rs:FindFirstChild("GameRemotes")
-        local r  = gr and gr:FindFirstChild("MainGameEvent")
-        if isRemote(r) then killRemote = r; return r end
-        -- fallback: scan for any RemoteEvent
-        local ok, desc = pcall(function() return rs:GetDescendants() end)
-        if ok then
-            for _, o in ipairs(desc) do
-                if isRemote(o) then killRemote = o; return o end
+    local function instanceKey(object)
+        if not object then return "nil" end
+        local ok, address = pcall(function() return object.Address end)
+        if ok and address then return tostring(address) end
+        local okName, fullName = pcall(function() return object:GetFullName() end)
+        return okName and fullName or tostring(object)
+    end
+
+    local function findKillRemote()
+        local storage = game:GetService("ReplicatedStorage")
+        local gameRemotes = storage and storage:FindFirstChild("GameRemotes")
+        local mainRemotes = storage and storage:FindFirstChild("MainRemotes")
+        local exact = (gameRemotes and gameRemotes:FindFirstChild("MainGameEvent"))
+                   or (mainRemotes and mainRemotes:FindFirstChild("MainRemoteEvent"))
+        if isRemote(exact) then return exact end
+        local fallback
+        local ok, descendants = pcall(function() return storage:GetDescendants() end)
+        if not ok or not descendants then return nil end
+        for _, object in ipairs(descendants) do
+            if isRemote(object) then
+                fallback = fallback or object
+                local name = string.lower(object.Name or "")
+                if string.find(name, "main", 1, true) or string.find(name, "game", 1, true) then
+                    return object
+                end
+            end
+        end
+        return fallback
+    end
+
+    local function findLoadoutRemote()
+        local storage = game:GetService("ReplicatedStorage")
+        local exact = storage and storage:FindFirstChild("Loadout")
+        if isRemote(exact) then return exact end
+        local remotes = storage and storage:FindFirstChild("Remotes")
+        exact = remotes and remotes:FindFirstChild("Loadout")
+        if isRemote(exact) then return exact end
+        local ok, descendants = pcall(function() return storage:GetDescendants() end)
+        if not ok or not descendants then return nil end
+        for _, object in ipairs(descendants) do
+            if isRemote(object) and string.find(string.lower(object.Name or ""), "loadout", 1, true) then
+                return object
             end
         end
         return nil
     end
 
-    -- ─── Kill core ────────────────────────────────────────────────────────────
-    -- Prefer a gun that has ammo; fall back to any gun with a handle
-    local function findGun()
-        local bp, char = getGunContainers()
-        local anyGun, anyHandle
-        for _, loc in ipairs({ char, bp }) do
-            if loc then
-                for _, item in ipairs(loc:GetChildren()) do
-                    if item.ClassName == "Tool" and GUN_NAMES[item.Name] then
-                        local h = item:FindFirstChild("Handle")
-                        if h then
-                            local ammo = item:FindFirstChild("Ammo")
-                            if not ammo or (tonumber(ammo.Value) or 0) > 0 then
-                                return item, h
-                            end
-                            anyGun, anyHandle = anyGun or item, anyHandle or h
-                        end
+    local function resolveKillAllRemotes()
+        if not isRemote(killAllRemote) then killAllRemote = findKillRemote() end
+        if not isRemote(loadoutRemote) then loadoutRemote = findLoadoutRemote() end
+        return killAllRemote, loadoutRemote
+    end
+    local resolveRemotes = resolveKillAllRemotes -- alias used by auto-stomp
+
+    -- ─── Kill core (backup port) ───────────────────────────────────────────────
+    local function getTacticalShotgun(character, backpack)
+        return (backpack and backpack:FindFirstChild("[TacticalShotgun]"))
+            or (character and character:FindFirstChild("[TacticalShotgun]"))
+    end
+
+    local function requestLoadout()
+        local _, remote = resolveKillAllRemotes()
+        if not remote then S.killAllStatus = "loadout remote missing"; return false end
+        local ok = pcall(function() remote:FireServer(LOADOUT) end)
+        S.killAllStatus = ok and "loadout requested" or "loadout failed"
+        return ok
+    end
+
+    local function requestAmmoRefill(tool, ammo)
+        local _, remote = resolveKillAllRemotes()
+        if not remote or refillActive or not tool or not ammo then return false end
+        local backpack, character = getGunContainers()
+        if not backpack then S.killAllStatus = "backpack missing"; return false end
+
+        refillActive = true
+        local requestedName = tool.Name
+        local oldTools, equippedTools = {}, {}
+        for _, container in ipairs({ backpack, character }) do
+            if container then
+                for _, item in ipairs(container:GetChildren()) do
+                    if item.ClassName == "Tool" and GUN_SET[item.Name] then
+                        oldTools[instanceKey(item)] = item
+                        if item.Parent == character then equippedTools[item.Name] = true end
                     end
                 end
             end
         end
-        return anyGun, anyHandle
-    end
 
-    -- Equip a tool. EquipTool method is unsupported in some executors, so
-    -- reparent into the character (the reliable path) and use EquipTool only
-    -- as a best-effort extra.
-    local function equipTool(tool)
-        local char = lp and lp.Character
-        if not char or tool.Parent == char then return end
-        local hum = getHumanoid()
-        if hum then pcall(function() hum:EquipTool(tool) end) end
-        if tool.Parent ~= char then
-            pcall(function() tool.Parent = char end)
-        end
-    end
+        local ok = pcall(function() remote:FireServer(LOADOUT) end)
+        if not ok then refillActive = false; S.killAllStatus = "refill failed"; return false end
 
-    local function buildPellets(head)
-        local pos     = head.Position
-        local pellets = {}
-        for _ = 1, PELLETS_PER_TARGET do
-            local j  = Vector3.new((math.random()-0.5)*0.5, (math.random()-0.5)*0.5, (math.random()-0.5)*0.5)
-            local jp = pos + j
-            pellets[#pellets+1] = { AimPosition = jp, Result1 = jp, Result2 = head, Result3 = Vector3.yAxis }
-        end
-        return pellets
-    end
-
-    -- Kill a single player — returns true if shots fired
-    local function killOne(player)
-        local char, valid = getKillTarget(player)
-        if not valid then return false end
-        local head = char and char:FindFirstChild("Head")
-        if not head then return false end
-
-        local remote = resolveRemotes()
-        if not remote then S.killAllStatus = "remote missing"; return false end
-
-        local tool, handle = findGun()
-        if not tool then
-            -- Try requesting loadout via main remote
-            pcall(function() remote:FireServer("Loadout", unpack(LOADOUT)) end)
-            task.wait(0.4)
-            tool, handle = findGun()
-        end
-        if not handle then S.killAllStatus = "no gun"; return false end
-
-        local ammo = tool:FindFirstChild("Ammo")
-        if ammo and (tonumber(ammo.Value) or 0) <= 0 then
-            S.killAllStatus = "no ammo"; return false
-        end
-
-        local rangeObj = tool:FindFirstChild("Range")
-        local dmgObj   = tool:FindFirstChild("Damage")
-        local range    = (rangeObj and tonumber(rangeObj.Value)) or 200
-        local damage   = (dmgObj   and tonumber(dmgObj.Value))   or 50
-
-        if tool.Parent ~= lp.Character then
-            equipTool(tool)
-            task.wait(EQUIP_DELAY)
-        end
-
-        handle = tool:FindFirstChild("Handle")
-        if not handle then return false end
-
-        local fired = 0
-        for shot = 1, SHOT_BURST do
-            local _, v2 = getKillTarget(player)
-            if not v2 then break end
-            local h2 = char:FindFirstChild("Head")
-            if not h2 then break end
-            handle = tool:FindFirstChild("Handle")
-            if not handle then break end
-            local pellets = buildPellets(h2)
-            local ok = pcall(function()
-                remote:FireServer("ShootGun", handle, handle.Position, pellets, nil, nil, nil, range, damage)
-            end)
-            if ok then fired = fired + 1 end
-            if shot < SHOT_BURST then task.wait(SHOT_DELAY) end
-        end
-
-        return fired > 0
-    end
-
-    local function killPlayers(targetPlayers, label)
-        if S.killInProgress then S.killAllStatus = "already firing"; return false end
-        S.killInProgress = true
-
-        local killed, total = 0, 0
-        for _, p in ipairs(targetPlayers or {}) do
-            if not samePlayer(p, lp) and not isFriendly(p) then
-                local _, valid = getKillTarget(p)
-                if valid then
-                    total = total + 1
-                    local ok = pcall(function()
-                        if killOne(p) then killed = killed + 1 end
-                    end)
-                    if not ok then end
-                    -- Small delay between players to avoid flooding
-                    if total > 1 then task.wait(0.05) end
+        local newestTools = {}
+        local deadline = tick() + 2
+        while S.running and tick() < deadline do
+            for _, container in ipairs({ backpack, character }) do
+                if container then
+                    for _, item in ipairs(container:GetChildren()) do
+                        if item.ClassName == "Tool" and GUN_SET[item.Name] and not oldTools[instanceKey(item)] then
+                            newestTools[item.Name] = item
+                        end
+                    end
                 end
+            end
+            if next(newestTools) then break end
+            task.wait(0.05)
+        end
+
+        local humanoid = getHumanoid()
+        for name, item in pairs(newestTools) do
+            if equippedTools[name] and character and item.Parent then
+                local equipped = false
+                if humanoid then equipped = pcall(function() humanoid:EquipTool(item) end) end
+                if not equipped then pcall(function() item.Parent = character end) end
             end
         end
 
-        S.killInProgress = false
-        S.killAllStatus  = (label or "") .. ": " .. killed .. "/" .. total .. " killed"
-        return killed > 0
+        refillActive = false
+        S.killAllStatus = next(newestTools) and "ammo refilled" or "refill timeout"
+        return newestTools[requestedName] or false
+    end
+
+    local function usableAmmo(tool, ammo)
+        if not ammo then return false end
+        local value = tonumber(ammo.Value) or 0
+        if value <= 0 then return requestAmmoRefill(tool, ammo) ~= false end
+        return true
+    end
+
+    local function getEquippedTool(character)
+        if not character then return nil end
+        for _, item in ipairs(character:GetChildren()) do
+            if item.ClassName == "Tool" then return item end
+        end
+        return nil
+    end
+
+    local function equipKillTool(tool, character, humanoid)
+        if not tool or not character then return false end
+        if tool.Parent == character then return true end
+        local equipped = false
+        if humanoid then equipped = pcall(function() humanoid:EquipTool(tool) end) end
+        if not equipped then equipped = pcall(function() tool.Parent = character end) end
+        if equipped then task.wait(EQUIP_DELAY) end
+        return tool.Parent == character
+    end
+
+    local function restoreKillTool(tool, previousTool, character, backpack, wasEquipped)
+        if wasEquipped then return end
+        local humanoid = getHumanoid()
+        if previousTool and previousTool.Parent == character then return end
+        if previousTool and previousTool.Parent == backpack and humanoid then
+            local restored = pcall(function() humanoid:EquipTool(previousTool) end)
+            if restored then task.wait(0.05); return end
+        end
+        if humanoid then
+            pcall(function() humanoid:UnequipTools() end)
+            task.wait(0.03)
+        end
+        if tool and backpack and tool.Parent == character then
+            pcall(function() tool.Parent = backpack end)
+        end
+    end
+
+    local function buildKillPellets(targetPlayers)
+        local pellets = {}
+        local targetCount = 0
+        for _, player in ipairs(targetPlayers or {}) do
+            local targetCharacter, valid = getKillTarget(player)
+            local head = targetCharacter and targetCharacter:FindFirstChild("Head")
+            if valid and head then
+                targetCount = targetCount + 1
+                local position = head.Position
+                for _ = 1, PELLETS_PER_TARGET do
+                    local jx = (math.random() - 0.5) * 0.5
+                    local jy = (math.random() - 0.5) * 0.5
+                    local jz = (math.random() - 0.5) * 0.5
+                    local jittered = position + Vector3.new(jx, jy, jz)
+                    pellets[#pellets + 1] = {
+                        AimPosition = jittered,
+                        Result1 = jittered,
+                        Result2 = head,
+                        Result3 = Vector3.yAxis
+                    }
+                end
+            end
+        end
+        return pellets, targetCount
+    end
+
+    local function runKillPlayers(targetPlayers, label, burst)
+        burst = burst or SHOT_BURST
+        local now = tick()
+        if now - (S.lastKillAllAt or 0) < S.killAllCooldown then
+            S.killAllStatus = "cooldown"
+            return false
+        end
+        S.lastKillAllAt = now
+
+        local remote = resolveKillAllRemotes()
+        local backpack, character = getGunContainers()
+        if not remote then S.killAllStatus = "kill remote missing"; return false end
+        if not character or not backpack then S.killAllStatus = "character missing"; return false end
+
+        local tool = getTacticalShotgun(character, backpack)
+        if not tool then
+            requestLoadout()
+            S.killAllStatus = "tactical requested"
+            return false
+        end
+
+        local handle = tool:FindFirstChild("Handle")
+        local ammo = tool:FindFirstChild("Ammo")
+        if ammo and (tonumber(ammo.Value) or 0) <= 0 then
+            local refilledTool = requestAmmoRefill(tool, ammo)
+            if refilledTool then
+                tool = refilledTool
+                handle = tool:FindFirstChild("Handle")
+                ammo = tool:FindFirstChild("Ammo")
+            end
+        end
+
+        if not handle or not usableAmmo(tool, ammo) then
+            S.killAllStatus = not handle and "handle missing" or "ammo refill requested"
+            return false
+        end
+
+        local pellets, targetCount = buildKillPellets(targetPlayers)
+        if #pellets == 0 then
+            S.killAllStatus = label and (label .. ": no targets") or "no targets"
+            return false
+        end
+
+        local rangeObject = tool:FindFirstChild("Range")
+        local damageObject = tool:FindFirstChild("Damage")
+        local range = rangeObject and (tonumber(rangeObject.Value) or 200) or 200
+        local damage = damageObject and (tonumber(damageObject.Value) or 50) or 50
+        local wasEquipped = tool.Parent == character
+        local previousTool = wasEquipped and nil or getEquippedTool(character)
+        local humanoid = getHumanoid()
+
+        if not equipKillTool(tool, character, humanoid) then
+            S.killAllStatus = "equip failed"
+            return false
+        end
+
+        handle = tool:FindFirstChild("Handle")
+        if not handle then
+            restoreKillTool(tool, previousTool, character, backpack, wasEquipped)
+            S.killAllStatus = "handle missing"
+            return false
+        end
+
+        local fired = 0
+        for shot = 1, burst do
+            handle = tool:FindFirstChild("Handle")
+            if not handle then break end
+            local shotPellets = shot == 1 and pellets or buildKillPellets(targetPlayers)
+            if #shotPellets == 0 then break end
+            local okFire = pcall(function()
+                remote:FireServer("ShootGun", handle, handle.Position, shotPellets, nil, nil, nil, range, damage)
+            end)
+            if okFire then fired = fired + 1 end
+            if shot < burst then task.wait(SHOT_DELAY) end
+        end
+
+        restoreKillTool(tool, previousTool, character, backpack, wasEquipped)
+
+        S.killAllStatus = (label and (label .. ": ") or "") .. "fired " .. tostring(fired) .. "x / " .. tostring(targetCount) .. " target(s)"
+        return fired > 0
+    end
+
+    local function killPlayers(targetPlayers, label, _isRetry, light)
+        if S.killInProgress and not _isRetry then
+            S.killAllStatus = "already firing"
+            return false
+        end
+        if not _isRetry then S.killInProgress = true end
+        -- Auto (looping) modes fire a single burst and skip the retry pass; the
+        -- loop itself retries next cycle. This avoids the mass-damage remote
+        -- spam that trips anticheat / kicks the client when auto-killing.
+        local burst = light and 1 or SHOT_BURST
+        local ok, result = pcall(function() return runKillPlayers(targetPlayers, label, burst) end)
+        if not _isRetry then S.killInProgress = false end
+        if not ok then S.killAllStatus = "kill error"; return false end
+
+        if result and not _isRetry and not light then
+            local retryTargets = targetPlayers
+            local retryLabel = label
+            task.spawn(function()
+                task.wait(0.35)
+                if S.killInProgress then return end
+                local survivors = {}
+                for _, player in ipairs(retryTargets or {}) do
+                    local _, valid = getKillTarget(player)
+                    if valid then survivors[#survivors + 1] = player end
+                end
+                if #survivors > 0 then
+                    S.lastKillAllAt = 0
+                    S.killInProgress = true
+                    pcall(function()
+                        runKillPlayers(survivors, retryLabel and (retryLabel .. "-r") or "retry")
+                    end)
+                    S.killInProgress = false
+                end
+            end)
+        end
+        return result
     end
 
     local function killAll()
-        return killPlayers(getKillCandidates(), "all")
+        return killPlayers(Players and Players:GetPlayers() or {}, "all")
     end
 
     local function killSelected()
@@ -358,13 +528,15 @@ local function boot()
     local function killAllExcept()
         local uid     = tonumber(S.killTargetUserId)
         local targets = {}
-        for _, p in ipairs(getKillCandidates()) do
-            if not uid or tonumber(p.UserId) ~= uid then
-                targets[#targets+1] = p
+        for _, p in ipairs(Players and Players:GetPlayers() or {}) do
+            if not samePlayer(p, lp) and not isFriendly(p) then
+                if not uid or tonumber(p.UserId) ~= uid then
+                    targets[#targets+1] = p
+                end
             end
         end
         if #targets == 0 then S.killAllStatus = "no targets"; return false end
-        return killPlayers(targets, "except")
+        return killPlayers(targets, "all-except")
     end
 
     -- ─── Auto stomp ──────────────────────────────────────────────────────────
@@ -471,16 +643,16 @@ local function boot()
                                     end
                                 end
                             end
-                            if #inRange > 0 then killPlayers(inRange, "sight") end
+                            if #inRange > 0 then killPlayers(inRange, "sight", false, true) end
                         end
                     elseif S.autoKillAll then
-                        killPlayers(getKillCandidates(), "auto-all")
+                        killPlayers(getKillCandidates(), "auto-all", false, true)
                     elseif S.autoKillTarget then
                         if S.autoRetarget then autoRetargetIfDead() end
                         local p = getSelectedPlayer()
                         if p then
                             local _, valid = getKillTarget(p)
-                            if valid then killPlayers({ p }, "auto") end
+                            if valid then killPlayers({ p }, "auto", false, true) end
                         end
                     end
                 end
@@ -513,19 +685,39 @@ local function boot()
         end)
     end)
 
+    -- Robust key match: Matcha's `input.KeyCode == Enum.KeyCode.K` can fail
+    -- (Enum comparison unsupported), so fall back to numeric/.Value/string match.
+    local function keyMatches(input, keyName, fallbackCode)
+        if not input then return false end
+        local keyCode = nil
+        pcall(function() keyCode = input.KeyCode end)
+        if not keyCode then return false end
+        local enumKey = nil
+        pcall(function() enumKey = Enum and Enum.KeyCode and Enum.KeyCode[keyName] end)
+        if enumKey and keyCode == enumKey then return true end
+        local numeric = tonumber(keyCode)
+        if numeric and numeric == fallbackCode then return true end
+        local value = nil
+        pcall(function() value = keyCode.Value end)
+        if tonumber(value) == fallbackCode then return true end
+        local text   = string.lower(tostring(keyCode))
+        local wanted = string.lower(tostring(keyName))
+        return text == wanted or string.sub(text, -#wanted) == wanted
+    end
+
     pcall(function()
-        hotkeyConn = UIS.InputBegan:Connect(function(input, gp)
-            if not S.running or gp then return end
+        -- No gameProcessedEvent gate: in Matcha `gp` is often truthy for every
+        -- key, which silently swallowed every hotkey.
+        hotkeyConn = UIS.InputBegan:Connect(function(input)
+            if not S.running then return end
             local focused = false
             pcall(function() focused = UIS:GetFocusedTextBox() ~= nil end)
             if focused then return end
-            pcall(function()
-                if input.KeyCode == Enum.KeyCode.K then
-                    task.spawn(killAll)
-                elseif input.KeyCode == Enum.KeyCode.L then
-                    task.spawn(killSelected)
-                end
-            end)
+            if keyMatches(input, "K", 107) then
+                task.spawn(killAll)
+            elseif keyMatches(input, "L", 108) then
+                task.spawn(killSelected)
+            end
         end)
     end)
 
