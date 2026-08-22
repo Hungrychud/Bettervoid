@@ -21,6 +21,8 @@ local function boot()
         autoKillAll      = false,
         killOnSight      = false,
         autoRetarget     = false,
+        autoStomp        = false,
+        stompInProgress  = false,
         killTargetUserId = nil,
         killTargetName   = "none",
         killTargetInput  = "",
@@ -475,6 +477,76 @@ local function boot()
         return killPlayers(targets, "except")
     end
 
+    -- ─── Auto stomp ──────────────────────────────────────────────────────────
+    local koConns = {}
+
+    local function doStomp(targetPlayer)
+        if S.stompInProgress then return end
+        local char       = targetPlayer and targetPlayer.Character
+        local targetRoot = char and char:FindFirstChild("HumanoidRootPart")
+        if not targetRoot then return end
+        local myRoot = getRoot()
+        if not myRoot then return end
+
+        S.stompInProgress = true
+
+        -- Teleport directly above the KO'd body (server raycasts downward)
+        local tp = targetRoot.Position
+        pcall(function()
+            myRoot.CFrame = CFrame.new(tp.X, tp.Y + 3, tp.Z)
+        end)
+
+        task.wait(0.18) -- give server time to receive updated position
+
+        local remote = resolveRemotes()
+        if remote then
+            pcall(function() remote:FireServer("Stomp") end)
+        end
+
+        task.wait(0.9)
+        S.stompInProgress = false
+    end
+
+    -- Watch for KO changes on all enemy players
+    task.spawn(function()
+        while S.running do
+            for _, p in ipairs(Players:GetPlayers()) do
+                if not samePlayer(p, lp) then
+                    local uid = tonumber(p.UserId)
+                    if uid and not koConns[uid] then
+                        local pchar = p.Character
+                        local be    = pchar and pchar:FindFirstChild("BodyEffects")
+                        local ko    = be and be:FindFirstChild("K.O")
+                        if ko then
+                            koConns[uid] = ko.Changed:Connect(function(val)
+                                if not val then return end
+                                if not S.autoStomp or S.stompInProgress then return end
+                                local isTarget = (S.autoKillTarget and tonumber(S.killTargetUserId) == uid)
+                                              or S.autoKillAll
+                                              or S.killOnSight
+                                if isTarget then
+                                    task.spawn(function() doStomp(p) end)
+                                end
+                            end)
+                        end
+                    end
+                end
+            end
+            -- Cleanup players who left
+            for uid in pairs(koConns) do
+                local found = false
+                for _, p in ipairs(Players:GetPlayers()) do
+                    if tonumber(p.UserId) == uid then found = true; break end
+                end
+                if not found then
+                    pcall(function() koConns[uid]:Disconnect() end)
+                    koConns[uid] = nil
+                end
+            end
+            task.wait(2)
+        end
+    end)
+
     -- ─── Auto kill loop ───────────────────────────────────────────────────────
     task.spawn(function()
         local lastAutoAt = 0
@@ -736,6 +808,9 @@ local function boot()
         autoRetargetToggle = killAuto:Toggle("Auto re-target on death", S.autoRetarget, function(on)
             S.autoRetarget = on and true or false
         end)
+        killAuto:Toggle("Auto stomp KO'd targets", S.autoStomp, function(on)
+            S.autoStomp = on and true or false
+        end)
         killAuto:Slider("Kill interval", S.autoKillInterval, 0.5, 0.5, 30, "s", function(v)
             S.autoKillInterval = math.max(0.5, math.min(30, v))
         end)
@@ -760,6 +835,7 @@ local function boot()
         end)
         killStatus:Label(function() return "Interval: " .. tostring(S.autoKillInterval) .. "s" end)
         killStatus:Label(function() return "Range:    " .. tostring(S.killOnSightRange) .. " studs" end)
+        killStatus:Label(function() return "Stomp:    " .. (S.autoStomp and "active" or "off") end)
         killStatus:Info("K = kill all  |  L = kill selected  |  scroll = cycle targets  |  P = menu")
 
         notify("BetterVoid", "loaded — K=kill all  L=kill selected", "success")
@@ -769,6 +845,10 @@ local function boot()
     S.unload = function()
         S.running = false
         clearFinder()
+        for uid, conn in pairs(koConns) do
+            pcall(function() conn:Disconnect() end)
+            koConns[uid] = nil
+        end
         if scrollConn then pcall(function() scrollConn:Disconnect() end) scrollConn = nil end
         if hotkeyConn then pcall(function() hotkeyConn:Disconnect() end) hotkeyConn = nil end
         if win then
