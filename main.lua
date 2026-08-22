@@ -1913,112 +1913,84 @@ local function boot()
     local function createUi()
         Lib = loadInsUi()
         if not Lib or not Lib.CreateWindow then
-            notifyUser("Better Void", "loaded without UI. V toggles void.", "warning")
+            notifyUser("BetterVoid", "no UI — V=void K=kill L=target", "warning")
             return false
         end
 
         win = Lib:CreateWindow({
-            title = "Better Void",
-            subtitle = "Void + instant kill",
-            size = Vector2.new(620, 430),
-            position = Vector2.new(48, 48),
+            title = "BetterVoid",
+            subtitle = "void · combat · auto",
+            size = Vector2.new(640, 460),
+            position = Vector2.new(56, 56),
             menuKey = "p",
-            theme = { accent = Color3.fromRGB(80, 170, 255) },
-            accentA = Color3.fromRGB(80, 170, 255),
-            accentB = Color3.fromRGB(180, 120, 255),
+            theme = { accent = Color3.fromRGB(210, 35, 35) },
+            accentA = Color3.fromRGB(210, 35, 35),
+            accentB = Color3.fromRGB(255, 80, 20),
             font = "Proxima",
-            opacity = 0.95,
-            rounding = 1,
+            opacity = 0.97,
+            rounding = 2,
             rowLines = true,
             checkboxStyle = true,
             keybindOverlay = true,
-            backgroundEffect = "Rain",
-            backgroundEffectColor = Color3.fromRGB(80, 170, 255),
+            backgroundEffect = "Dots",
+            backgroundEffectColor = Color3.fromRGB(180, 30, 30),
             autoSave = false,
             smartFps = true,
             gameInput = false,
             startOpen = true
         })
 
-        if win.AddSettingsTab then
-            win:AddSettingsTab("cog")
-        end
+        if win.AddSettingsTab then win:AddSettingsTab("cog") end
 
-        local tab = win:Tab("Void", "shield")
-        local killTab = win:Tab("Instant Kill", "target")
-        local controls = tab:Section("Controls", "Left", "void movement")
-        local utilities = tab:Section("Utilities", "Left", "presets, marker, config")
-        local status = tab:Section("Status", "Right", "live values")
-        local killControls = killTab:Section("Controls", "Left", "target controls")
-        local killStatus = killTab:Section("Status", "Right", "instant kill status")
-        handles.peopleFinderSection = killTab:Section("People Finder", "Right", "player list")
+        local voidTab   = win:Tab("Void",   "shield")
+        local combatTab = win:Tab("Combat", "target")
+        local autoTab   = win:Tab("Auto",   "bolt")
+        local cfgTab    = win:Tab("Config", "gear")
 
-        toggle = controls:Toggle("Better Void", false, function(on)
-            if syncingToggle then
-                return
-            end
+        -- VOID TAB
+        local moveSection = voidTab:Section("Flight",          "Left",  "void movement controls")
+        local roamSection = voidTab:Section("Roam",            "Left",  "map movement pattern")
+        local aimSection  = voidTab:Section("Aim Assist",      "Left",  "stabilizer while shooting")
+        local voidStatus  = voidTab:Section("Live Status",     "Right", "real-time values")
+
+        toggle = moveSection:Toggle("Void enabled [V]", false, function(on)
+            if syncingToggle then return end
             setEnabled(on, false)
         end)
-        if toggle and toggle.AddKeybind then
-            toggle:AddKeybind("v", "Toggle")
-        end
+        if toggle and toggle.AddKeybind then toggle:AddKeybind("v", "Toggle") end
 
-        handles.height = controls:Slider("Height", S.height, 1000, 100, 100000, " studs", function(v)
-            S.height = math.floor(v)
-        end)
-        handles.rate = controls:Slider("Tick delay", S.rate, 0.01, 0.03, 0.5, "s", function(v)
-            S.rate = math.max(0.03, v)
-        end)
-        handles.velocity = controls:Slider("Up velocity", S.velocity, 100, 500, 5000, "", function(v)
-            S.velocity = math.floor(v)
-        end)
-        handles.returnHeight = controls:Slider("Return height", S.returnHeight, 1, 0, 50, " studs", function(v)
-            S.returnHeight = math.floor(v)
-        end)
+        handles.height       = moveSection:Slider("Height",        S.height,       1000, 100,  100000, " studs", function(v) S.height = math.floor(v) end)
+        handles.velocity     = moveSection:Slider("Up velocity",   S.velocity,     100,  500,  5000,   "",        function(v) S.velocity = math.floor(v) end)
+        handles.rate         = moveSection:Slider("Tick rate",     S.rate,         0.01, 0.03, 0.5,    "s",       function(v) S.rate = math.max(0.03, v) end)
+        handles.returnHeight = moveSection:Slider("Return height", S.returnHeight, 1,    0,    50,     " studs",  function(v) S.returnHeight = math.floor(v) end)
 
-        roamToggle = controls:Toggle("Map roam", S.roam, function(on)
-            S.roam = on and true or false
-        end)
-        handles.roamRadius = controls:Slider("Roam radius", S.roamRadius, 50, 100, 5000, " studs", function(v)
-            S.roamRadius = math.floor(v)
-        end)
-        handles.roamSpeed = controls:Slider("Roam speed", S.roamSpeed, 1000, 0.1, 100000, "", function(v)
-            S.roamSpeed = math.max(0.1, math.min(100000, v))
-        end)
+        roamToggle         = roamSection:Toggle("Map roam", S.roam, function(on) S.roam = on and true or false end)
+        handles.roamRadius = roamSection:Slider("Radius", S.roamRadius, 50,   100, 5000,   " studs", function(v) S.roamRadius = math.floor(v) end)
+        handles.roamSpeed  = roamSection:Slider("Speed",  S.roamSpeed,  1000, 0.1, 100000, "",        function(v) S.roamSpeed = math.max(0.1, math.min(100000, v)) end)
 
-        controls:Divider("Shooting support")
-        controls:Toggle("Aim stabilizer", S.aimStabilizer, function(on)
-            S.aimStabilizer = on and true or false
-        end)
-        handles.aimHoldTime = controls:Slider("Aim hold time", S.aimHoldTime, 0.05, 0.05, 3, "s", function(v)
-            S.aimHoldTime = math.max(0.05, math.min(3, v))
-        end)
+        aimSection:Toggle("Aim stabilizer", S.aimStabilizer, function(on) S.aimStabilizer = on and true or false end)
+        handles.aimHoldTime = aimSection:Slider("Hold time", S.aimHoldTime, 0.05, 0.05, 3, "s", function(v) S.aimHoldTime = math.max(0.05, math.min(3, v)) end)
+        overlayToggle = aimSection:Toggle("Position overlay", S.showOverlay, function(on) S.showOverlay = on and true or false end)
 
-        overlayToggle = controls:Toggle("Position overlay", S.showOverlay, function(on)
-            S.showOverlay = on and true or false
+        voidStatus:Label(function() return "Void:     " .. (S.enabled and "ON" or "OFF") end)
+        voidStatus:Label(function() return "Roam:     " .. (S.roam and "ON" or "OFF") end)
+        voidStatus:Label(function() return "Height:   " .. tostring(S.height) end)
+        voidStatus:Label(function() return "Velocity: " .. tostring(S.velocity) end)
+        voidStatus:Label(function() return "Rate:     " .. tostring(S.rate) .. "s" end)
+        voidStatus:Label(function()
+            local root = getRoot()
+            return "Y pos:    " .. (root and tostring(math.floor(root.Position.Y)) or "—")
         end)
+        voidStatus:Label(function() return "Marker:   " .. (S.hasReturnMarker and "saved" or "none") end)
+        voidStatus:Info("V = void | P = menu | scroll = cycle targets")
 
-        controls:Divider("Armor")
-        autoArmorToggle = controls:Toggle("Auto armor assist", S.autoArmor, function(on)
-            S.setAutoArmor(on)
-        end)
-        handles.armorCooldown = controls:Slider("Armor cooldown", S.armorCooldown, 1, 2, 60, "s", function(v)
-            S.armorCooldown = math.floor(v)
-        end)
-        handles.armorTriggerRatio = controls:Slider("Buy below armor", S.armorTriggerRatio, 0.05, 0.1, 1, "", function(v)
-            S.armorTriggerRatio = math.max(0.1, math.min(1, v))
-        end)
-        controls:Button("Armor assist now", function()
-            task.spawn(function()
-                local wasAuto = S.autoArmor
-                S.autoArmor = true
-                local ok = buyArmor(true)
-                S.autoArmor = wasAuto
-                notifyUser("Armor assist", ok and "armor bought" or tostring(S.armorStatus), ok and "success" or "warning")
-            end)
-        end)
-        killControls:Divider("Target")
-        handles.killTargetName = killControls:Textbox("Target name", S.killTargetInput or "", function(value)
+        -- COMBAT TAB
+        local targetSection = combatTab:Section("Target",        "Left",  "who to kill")
+        local fireSection   = combatTab:Section("Fire",          "Left",  "execute kills")
+        handles.peopleFinderSection = combatTab:Section("People Finder", "Right", "browse players")
+        local combatStatus  = combatTab:Section("Kill Status",   "Right", "live feedback")
+
+        handles.killTargetName = targetSection:Textbox("Target name", S.killTargetInput or "", function(value)
             local text = tostring(value or ""):match("^%s*(.-)%s*$")
             setKillTargetInputValue(text)
             if text == "" then
@@ -2027,7 +1999,6 @@ local function boot()
                 S.killAllStatus = "target cleared"
                 return
             end
-
             local player = findKillPlayerByName(text)
             if player then
                 S.killTargetUserId = tonumber(player.UserId)
@@ -2038,149 +2009,163 @@ local function boot()
                 S.killTargetName = text
                 S.killAllStatus = "target typed"
             end
-        end, "Exact or partial player name")
-        killControls:Button("Find people", function()
-            openPeopleFinder()
-        end)
-        handles.peopleFinderSection:Button("Refresh people list", function()
-            openPeopleFinder()
-        end)
-        handles.peopleFinderSection:Info("Type in Target name to filter, then refresh. Click a player name to select them.")
-        killControls:Button("Kill selected target [L]", function()
-            task.spawn(function()
-                local ok = killSelectedTarget()
-                notifyUser("Kill target", tostring(S.killAllStatus), ok and "success" or "warning")
-            end)
-        end):SetRisk()
-        killControls:Button("Previous kill target", function()
-            local ok = selectPreviousKillTarget()
-            notifyUser("Kill target", ok and tostring(S.killTargetName) or tostring(S.killAllStatus), ok and "success" or "warning")
-        end)
-        killControls:Button("Next kill target", function()
-            local ok = selectNextKillTarget()
-            notifyUser("Kill target", ok and tostring(S.killTargetName) or tostring(S.killAllStatus), ok and "success" or "warning")
-        end)
-        killControls:Button("Clear kill target", function()
-            clearKillTarget()
-            notifyUser("Kill target", "cleared", "info")
-        end)
+        end, "Exact or partial name")
 
-        killControls:Divider("All players")
-        handles.killAllCooldown = killControls:Slider("Kill cooldown", S.killAllCooldown, 0.1, 0.3, 10, "s", function(v)
+        targetSection:Button("Select nearest", function()
+            local ok = selectNearestKillTarget()
+            notifyUser("Target", ok and tostring(S.killTargetName) or tostring(S.killAllStatus), ok and "success" or "warning")
+        end)
+        targetSection:Button("Previous target", function()
+            local ok = selectPreviousKillTarget()
+            notifyUser("Target", ok and tostring(S.killTargetName) or tostring(S.killAllStatus), ok and "success" or "warning")
+        end)
+        targetSection:Button("Next target", function()
+            local ok = selectNextKillTarget()
+            notifyUser("Target", ok and tostring(S.killTargetName) or tostring(S.killAllStatus), ok and "success" or "warning")
+        end)
+        targetSection:Button("Clear target", function()
+            clearKillTarget()
+            notifyUser("Target", "cleared", "info")
+        end)
+        targetSection:Button("Open people finder", function() openPeopleFinder() end)
+
+        handles.killAllCooldown = fireSection:Slider("Cooldown", S.killAllCooldown, 0.1, 0.3, 10, "s", function(v)
             S.killAllCooldown = math.max(0.3, math.min(10, v))
         end)
-        killControls:Button("Kill all now [K]", function()
+        fireSection:Button("Kill selected [L]", function()
+            task.spawn(function()
+                local ok = killSelectedTarget()
+                notifyUser("Kill", tostring(S.killAllStatus), ok and "success" or "warning")
+            end)
+        end):SetRisk()
+        fireSection:Button("Kill all [K]", function()
             task.spawn(function()
                 local ok = killAll()
                 notifyUser("Kill all", tostring(S.killAllStatus), ok and "success" or "warning")
             end)
         end):SetRisk()
-        killControls:Button("Kill all except selected", function()
+        fireSection:Button("Kill all except selected", function()
             task.spawn(function()
                 local ok = killAllExceptSelected()
                 notifyUser("Kill except", tostring(S.killAllStatus), ok and "success" or "warning")
             end)
         end):SetRisk()
 
-        killControls:Divider("Auto kill")
-        autoKillTargetToggle = killControls:Toggle("Auto kill selected target", S.autoKillTarget, function(on)
+        handles.peopleFinderSection:Button("Refresh list", function() openPeopleFinder() end)
+        handles.peopleFinderSection:Info("Type name above to filter. Click player to select.")
+
+        combatStatus:Label(function() return "Target: " .. tostring(S.killTargetName or "none") end)
+        combatStatus:Label(function() return "Status: " .. tostring(S.killAllStatus) end)
+        combatStatus:Label(function()
+            local p = getSelectedKillPlayer()
+            if not p then return "Health: —" end
+            local char = p.Character
+            local hum = char and char:FindFirstChildOfClass("Humanoid")
+            if not hum then return "Health: —" end
+            local hp  = math.floor(tonumber(hum.Health) or 0)
+            local max = math.floor(tonumber(hum.MaxHealth) or 100)
+            return "Health: " .. hp .. " / " .. max
+        end)
+        combatStatus:Label(function()
+            local armor, maxArmor = getArmorState()
+            return "Armor:  " .. (armor and (tostring(math.floor(armor)) .. "/" .. tostring(math.floor(maxArmor or 0))) or "—")
+        end)
+        combatStatus:Info("K = kill all | L = kill selected | scroll = cycle")
+
+        -- AUTO TAB
+        local autoKillSection  = autoTab:Section("Auto Kill",    "Left",  "automated killing")
+        local autoArmorSection = autoTab:Section("Armor Assist", "Left",  "auto buy armor")
+        local autoStatus       = autoTab:Section("Auto Status",  "Right", "automation state")
+
+        autoKillTargetToggle = autoKillSection:Toggle("Auto kill selected", S.autoKillTarget, function(on)
             S.autoKillTarget = on and true or false
             if on then S.autoKillAll = false; S.killOnSight = false end
             if autoKillAllToggle and autoKillAllToggle.Set then pcall(function() autoKillAllToggle:Set(S.autoKillAll) end) end
             if killOnSightToggle and killOnSightToggle.Set then pcall(function() killOnSightToggle:Set(S.killOnSight) end) end
         end)
-        autoKillAllToggle = killControls:Toggle("Auto kill all", S.autoKillAll, function(on)
+        autoKillAllToggle = autoKillSection:Toggle("Auto kill all", S.autoKillAll, function(on)
             S.autoKillAll = on and true or false
             if on then S.autoKillTarget = false; S.killOnSight = false end
             if autoKillTargetToggle and autoKillTargetToggle.Set then pcall(function() autoKillTargetToggle:Set(S.autoKillTarget) end) end
             if killOnSightToggle and killOnSightToggle.Set then pcall(function() killOnSightToggle:Set(S.killOnSight) end) end
         end)
-        killOnSightToggle = killControls:Toggle("Kill on sight", S.killOnSight, function(on)
+        killOnSightToggle = autoKillSection:Toggle("Kill on sight", S.killOnSight, function(on)
             S.killOnSight = on and true or false
             if on then S.autoKillTarget = false; S.autoKillAll = false end
             if autoKillTargetToggle and autoKillTargetToggle.Set then pcall(function() autoKillTargetToggle:Set(S.autoKillTarget) end) end
             if autoKillAllToggle and autoKillAllToggle.Set then pcall(function() autoKillAllToggle:Set(S.autoKillAll) end) end
         end)
-        autoRetargetToggle = killControls:Toggle("Auto re-target on death", S.autoRetarget, function(on)
+        autoRetargetToggle = autoKillSection:Toggle("Auto re-target on death", S.autoRetarget, function(on)
             S.autoRetarget = on and true or false
         end)
-        handles.autoKillInterval = killControls:Slider("Auto kill interval", S.autoKillInterval, 0.5, 0.5, 30, "s", function(v)
-            S.autoKillInterval = math.max(0.5, math.min(30, v))
-        end)
-        handles.killOnSightRange = killControls:Slider("Sight range", S.killOnSightRange, 50, 50, 5000, " studs", function(v)
-            S.killOnSightRange = math.floor(v)
-        end)
-        killControls:Button("Select nearest target", function()
-            local ok = selectNearestKillTarget()
-            notifyUser("Kill target", ok and tostring(S.killTargetName) or tostring(S.killAllStatus), ok and "success" or "warning")
+        handles.autoKillInterval  = autoKillSection:Slider("Kill interval", S.autoKillInterval,  0.5, 0.5,  30,   "s",      function(v) S.autoKillInterval = math.max(0.5, math.min(30, v)) end)
+        handles.killOnSightRange  = autoKillSection:Slider("Sight range",   S.killOnSightRange,  50,  50,   5000, " studs", function(v) S.killOnSightRange = math.floor(v) end)
+
+        autoArmorToggle = autoArmorSection:Toggle("Auto armor assist", S.autoArmor, function(on) S.setAutoArmor(on) end)
+        handles.armorCooldown      = autoArmorSection:Slider("Check cooldown", S.armorCooldown,     1,    2,   60,  "s",  function(v) S.armorCooldown = math.floor(v) end)
+        handles.armorTriggerRatio  = autoArmorSection:Slider("Buy below",      S.armorTriggerRatio, 0.05, 0.1, 1,   "",   function(v) S.armorTriggerRatio = math.max(0.1, math.min(1, v)) end)
+        autoArmorSection:Button("Buy armor now", function()
+            task.spawn(function()
+                local wasAuto = S.autoArmor
+                S.autoArmor = true
+                local ok = buyArmor(true)
+                S.autoArmor = wasAuto
+                notifyUser("Armor", ok and "bought" or tostring(S.armorStatus), ok and "success" or "warning")
+            end)
         end)
 
-        utilities:Divider("Presets")
-        utilities:Button("Above map", function() applyPreset("Above map") end)
-        utilities:Button("Wide roam", function() applyPreset("Wide roam") end)
-        utilities:Button("High sky", function() applyPreset("High sky") end)
-        utilities:Button("Fast circle", function() applyPreset("Fast circle") end)
+        autoStatus:Label(function()
+            local mode = S.killOnSight and "Kill on sight" or S.autoKillAll and "Kill all" or S.autoKillTarget and "Kill target" or "Off"
+            return "Mode:     " .. mode
+        end)
+        autoStatus:Label(function() return "Interval: " .. tostring(S.autoKillInterval) .. "s" end)
+        autoStatus:Label(function() return "Range:    " .. tostring(S.killOnSightRange) .. " studs" end)
+        autoStatus:Label(function() return "Retarget: " .. (S.autoRetarget and "ON" or "OFF") end)
+        autoStatus:Label(function() return "Armor:    " .. (S.autoArmor and "ON" or "OFF") end)
+        autoStatus:Label(function()
+            local armor, maxArmor = getArmorState()
+            return "Armor HP: " .. (armor and (tostring(math.floor(armor)) .. "/" .. tostring(math.floor(maxArmor or 0))) or tostring(S.armorStatus))
+        end)
 
-        utilities:Divider("Return marker")
-        utilities:Button("Save marker", function() saveReturnMarker() end)
-        utilities:Button("Return to marker", function() returnToMarker() end)
+        -- CONFIG TAB
+        local presetSection = cfgTab:Section("Presets",        "Left",  "void movement presets")
+        local markerSection = cfgTab:Section("Return Marker",  "Left",  "save/return position")
+        local sysSection    = cfgTab:Section("System",         "Left",  "config, reset, unload")
 
-        utilities:Divider("Config")
-        utilities:Button("Save config", function()
+        presetSection:Button("Above map",   function() applyPreset("Above map") end)
+        presetSection:Button("Wide roam",   function() applyPreset("Wide roam") end)
+        presetSection:Button("High sky",    function() applyPreset("High sky") end)
+        presetSection:Button("Fast circle", function() applyPreset("Fast circle") end)
+
+        markerSection:Button("Save marker",      function() saveReturnMarker() end)
+        markerSection:Button("Return to marker", function() returnToMarker() end)
+        markerSection:Label(function() return "Marker: " .. (S.hasReturnMarker and "saved" or "none") end)
+
+        sysSection:Button("Save config", function()
             local ok, err = saveConfig()
-            notifyUser("Config", ok and "saved" or ("save failed: " .. tostring(err)), ok and "success" or "error")
+            notifyUser("Config", ok and "saved" or ("failed: " .. tostring(err)), ok and "success" or "error")
         end)
-        utilities:Button("Load config", function()
+        sysSection:Button("Load config", function()
             local ok, err = loadConfig()
             if ok then syncUi() end
-            notifyUser("Config", ok and "loaded" or ("load failed: " .. tostring(err)), ok and "success" or "error")
+            notifyUser("Config", ok and "loaded" or ("failed: " .. tostring(err)), ok and "success" or "error")
         end)
-        utilities:Button("Panic stop", function() panic() end):SetRisk()
-        utilities:Button("Force reset self", function() forceReset() end):SetRisk()
-        handles.resetKey = utilities:Textbox("Force reset key", S.resetKey or "F", function(value)
+        handles.resetKey = sysSection:Textbox("Force reset key", S.resetKey or "F", function(value)
             local key = normalizeKeyName(value, "F")
             if key == "V" or key == "K" or key == "L" then
-                notifyUser("Force reset", "V, K and L are reserved", "warning")
+                notifyUser("Reset key", "V K L are reserved", "warning")
                 key = S.resetKey or "F"
             end
             S.resetKey = key
-            if handles.resetKey then
-                pcall(function()
-                    handles.resetKey.Value = S.resetKey
-                end)
-            end
-            notifyUser("Force reset", "key set to " .. tostring(S.resetKey), "success")
+            if handles.resetKey then pcall(function() handles.resetKey.Value = S.resetKey end) end
+            notifyUser("Reset key", "set to " .. tostring(S.resetKey), "success")
         end, "Example: F")
-        utilities:Button("Unload", function() S.unload() end):SetRisk()
-
-        status:Label(function() return "Void: " .. (S.enabled and "ON" or "OFF") end)
-        status:Label(function() return "Roam: " .. (S.roam and "ON" or "OFF") end)
-        status:Label(function() return "Height: " .. tostring(S.height) end)
-        status:Label(function() return "Delay: " .. tostring(S.rate) .. "s" end)
-        status:Label(function() return "Velocity: " .. tostring(S.velocity) end)
-        status:Label(function() return "Roam radius: " .. tostring(S.roamRadius) end)
-        status:Label(function() return "Aim stabilizer: " .. (S.aimStabilizer and "ON" or "OFF") end)
-        status:Label(function() return "Kill all: " .. tostring(S.killAllStatus) end)
-        status:Label(function() return "Kill target: " .. tostring(S.killTargetName or "none") end)
-        status:Label(function() return "Armor assist: " .. (S.autoArmor and "ON" or "OFF") end)
-        status:Label(function()
-            local armor, maxArmor = getArmorState()
-            return "Armor: " .. (armor and (tostring(math.floor(armor)) .. "/" .. tostring(math.floor(maxArmor or 0))) or tostring(S.armorStatus))
-        end)
-        status:Label(function()
-            local root = getRoot()
-            return "Y position: " .. (root and tostring(math.floor(root.Position.Y)) or "none")
-        end)
-        status:Label(function() return "Marker: " .. (S.hasReturnMarker and "saved" or "none") end)
-        status:Label(function() return "Force reset key: " .. tostring(S.resetKey or "F") end)
-        status:Info("P menu, V void, K kill all, L selected kill, reset key, mouse wheel target.")
-        killStatus:Label(function() return "Target: " .. tostring(S.killTargetName or "none") end)
-        killStatus:Label(function() return "Typed name: " .. tostring(S.killTargetInput or "") end)
-        killStatus:Label(function() return "Status: " .. tostring(S.killAllStatus) end)
-        killStatus:Info("Mouse wheel cycles targets. K kills all; L kills the selected target.")
+        sysSection:Button("Force reset self", function() forceReset() end):SetRisk()
+        sysSection:Button("Panic stop",       function() panic() end):SetRisk()
+        sysSection:Button("Unload",           function() S.unload() end):SetRisk()
 
         syncUi()
-        notifyUser("Better Void", "INS-ui loaded. P opens menu, V toggles.", "success")
+        notifyUser("BetterVoid", "loaded — P=menu V=void K=kill L=target", "success")
         return true
     end
 
