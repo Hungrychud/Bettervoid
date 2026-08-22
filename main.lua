@@ -36,6 +36,11 @@ local function boot()
     -- ─── Kill constants ───────────────────────────────────────────────────────
     local PELLETS_PER_TARGET = 10
     local SHOT_BURST         = 3
+    -- Auto "all"/"sight" hit at most this many (nearest) targets per cycle. One
+    -- FireServer hitting the whole server at once is an obvious mass-damage
+    -- signature that gets the client kicked (looks like a crash). Spreading the
+    -- kills across cycles keeps each shot plausible. 0 = no cap.
+    local AUTO_MAX_TARGETS   = 6
     local SHOT_DELAY         = 0.065
     local EQUIP_DELAY        = 0.06
     local LOADOUT            = { "[Double-Barrel SG]", "[Revolver]", "[TacticalShotgun]", "None" }
@@ -677,6 +682,13 @@ local function boot()
     -- ─── Auto kill loop ───────────────────────────────────────────────────────
     -- Whole body wrapped in pcall so a transient error can never freeze or stop
     -- the loop (a stuck loop with no yield is what crashes the client).
+    local function capTargets(list)
+        if AUTO_MAX_TARGETS <= 0 or #list <= AUTO_MAX_TARGETS then return list end
+        local out = {}
+        for i = 1, AUTO_MAX_TARGETS do out[i] = list[i] end
+        return out
+    end
+
     task.spawn(function()
         local lastAutoAt = 0
         while S.running do
@@ -699,10 +711,10 @@ local function boot()
                                     end
                                 end
                             end
-                            if #inRange > 0 then killPlayers(inRange, "sight", false, true) end
+                            if #inRange > 0 then killPlayers(capTargets(inRange), "sight", false, true) end
                         end
                     elseif S.autoKillAll then
-                        killPlayers(getKillCandidates(), "auto-all", false, true)
+                        killPlayers(capTargets(getKillCandidates()), "auto-all", false, true)
                     elseif S.autoKillTarget then
                         if S.autoRetarget then autoRetargetIfDead() end
                         local p = getSelectedPlayer()
