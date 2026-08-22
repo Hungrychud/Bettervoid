@@ -947,23 +947,36 @@ local function boot()
 
         -- AUTO KILL
         killAuto:Divider("Auto kill mode")
+        -- Re-entrancy guard: turning one mode on switches the others off via
+        -- :Set(false). If the UI lib fires a toggle's callback on EVERY :Set
+        -- (not only on change), those reciprocal :Set(false) calls recurse into
+        -- each other → stack overflow → the client freezes the instant you
+        -- toggle. The guard makes nested sync calls no-op.
+        local syncingModes = false
+        local function selectMode(active) -- "target" | "all" | "sight" | nil
+            S.autoKillTarget = active == "target"
+            S.autoKillAll    = active == "all"
+            S.killOnSight    = active == "sight"
+            if syncingModes then return end
+            syncingModes = true
+            pcall(function()
+                if active ~= "target" and autoKillTargetToggle and autoKillTargetToggle.Set then autoKillTargetToggle:Set(false) end
+                if active ~= "all"    and autoKillAllToggle    and autoKillAllToggle.Set    then autoKillAllToggle:Set(false) end
+                if active ~= "sight"  and killOnSightToggle    and killOnSightToggle.Set    then killOnSightToggle:Set(false) end
+            end)
+            syncingModes = false
+        end
         autoKillTargetToggle = killAuto:Toggle("Auto kill selected", S.autoKillTarget, function(on)
-            S.autoKillTarget = on and true or false
-            if on then S.autoKillAll = false; S.killOnSight = false end
-            if autoKillAllToggle   and autoKillAllToggle.Set   then pcall(function() autoKillAllToggle:Set(false) end) end
-            if killOnSightToggle   and killOnSightToggle.Set   then pcall(function() killOnSightToggle:Set(false) end) end
+            if syncingModes then S.autoKillTarget = on and true or false; return end
+            selectMode(on and "target" or nil)
         end)
         autoKillAllToggle = killAuto:Toggle("Auto kill all", S.autoKillAll, function(on)
-            S.autoKillAll = on and true or false
-            if on then S.autoKillTarget = false; S.killOnSight = false end
-            if autoKillTargetToggle and autoKillTargetToggle.Set then pcall(function() autoKillTargetToggle:Set(false) end) end
-            if killOnSightToggle    and killOnSightToggle.Set    then pcall(function() killOnSightToggle:Set(false) end) end
+            if syncingModes then S.autoKillAll = on and true or false; return end
+            selectMode(on and "all" or nil)
         end)
         killOnSightToggle = killAuto:Toggle("Kill on sight", S.killOnSight, function(on)
-            S.killOnSight = on and true or false
-            if on then S.autoKillTarget = false; S.autoKillAll = false end
-            if autoKillTargetToggle and autoKillTargetToggle.Set then pcall(function() autoKillTargetToggle:Set(false) end) end
-            if autoKillAllToggle    and autoKillAllToggle.Set    then pcall(function() autoKillAllToggle:Set(false) end) end
+            if syncingModes then S.killOnSight = on and true or false; return end
+            selectMode(on and "sight" or nil)
         end)
         autoRetargetToggle = killAuto:Toggle("Auto re-target on death", S.autoRetarget, function(on)
             S.autoRetarget = on and true or false
