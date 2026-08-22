@@ -1031,7 +1031,7 @@ local function boot()
     local function autoRetargetIfDead()
         if not S.killTargetUserId then return end
         local player = getSelectedKillPlayer()
-        local _, valid = player and getKillTarget(player) or nil, false
+        local _, valid = getKillTarget(player)
         if not valid then
             local changed = selectNearestKillTarget()
             if changed then
@@ -2085,19 +2085,19 @@ local function boot()
         killControls:Divider("Auto kill")
         autoKillTargetToggle = killControls:Toggle("Auto kill selected target", S.autoKillTarget, function(on)
             S.autoKillTarget = on and true or false
-            if on then S.autoKillAll = false S.killOnSight = false end
+            if on then S.autoKillAll = false; S.killOnSight = false end
             if autoKillAllToggle and autoKillAllToggle.Set then pcall(function() autoKillAllToggle:Set(S.autoKillAll) end) end
             if killOnSightToggle and killOnSightToggle.Set then pcall(function() killOnSightToggle:Set(S.killOnSight) end) end
         end)
         autoKillAllToggle = killControls:Toggle("Auto kill all", S.autoKillAll, function(on)
             S.autoKillAll = on and true or false
-            if on then S.autoKillTarget = false S.killOnSight = false end
+            if on then S.autoKillTarget = false; S.killOnSight = false end
             if autoKillTargetToggle and autoKillTargetToggle.Set then pcall(function() autoKillTargetToggle:Set(S.autoKillTarget) end) end
             if killOnSightToggle and killOnSightToggle.Set then pcall(function() killOnSightToggle:Set(S.killOnSight) end) end
         end)
         killOnSightToggle = killControls:Toggle("Kill on sight", S.killOnSight, function(on)
             S.killOnSight = on and true or false
-            if on then S.autoKillTarget = false S.autoKillAll = false end
+            if on then S.autoKillTarget = false; S.autoKillAll = false end
             if autoKillTargetToggle and autoKillTargetToggle.Set then pcall(function() autoKillTargetToggle:Set(S.autoKillTarget) end) end
             if autoKillAllToggle and autoKillAllToggle.Set then pcall(function() autoKillAllToggle:Set(S.autoKillAll) end) end
         end)
