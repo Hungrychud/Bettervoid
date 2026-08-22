@@ -217,19 +217,40 @@ local function boot()
     end
 
     -- ─── Kill core ────────────────────────────────────────────────────────────
+    -- Prefer a gun that has ammo; fall back to any gun with a handle
     local function findGun()
         local bp, char = getGunContainers()
+        local anyGun, anyHandle
         for _, loc in ipairs({ char, bp }) do
             if loc then
                 for _, item in ipairs(loc:GetChildren()) do
                     if item.ClassName == "Tool" and GUN_NAMES[item.Name] then
                         local h = item:FindFirstChild("Handle")
-                        if h then return item, h end
+                        if h then
+                            local ammo = item:FindFirstChild("Ammo")
+                            if not ammo or (tonumber(ammo.Value) or 0) > 0 then
+                                return item, h
+                            end
+                            anyGun, anyHandle = anyGun or item, anyHandle or h
+                        end
                     end
                 end
             end
         end
-        return nil, nil
+        return anyGun, anyHandle
+    end
+
+    -- Equip a tool. EquipTool method is unsupported in some executors, so
+    -- reparent into the character (the reliable path) and use EquipTool only
+    -- as a best-effort extra.
+    local function equipTool(tool)
+        local char = lp and lp.Character
+        if not char or tool.Parent == char then return end
+        local hum = getHumanoid()
+        if hum then pcall(function() hum:EquipTool(tool) end) end
+        if tool.Parent ~= char then
+            pcall(function() tool.Parent = char end)
+        end
     end
 
     local function buildPellets(head)
@@ -272,10 +293,8 @@ local function boot()
         local range    = (rangeObj and tonumber(rangeObj.Value)) or 200
         local damage   = (dmgObj   and tonumber(dmgObj.Value))   or 50
 
-        local hum         = getHumanoid()
-        local wasEquipped = tool.Parent == lp.Character
-        if not wasEquipped and hum then
-            pcall(function() hum:EquipTool(tool) end)
+        if tool.Parent ~= lp.Character then
+            equipTool(tool)
             task.wait(EQUIP_DELAY)
         end
 
@@ -381,6 +400,7 @@ local function boot()
     -- Watch for KO changes on all enemy players
     task.spawn(function()
         while S.running do
+          pcall(function()
             for _, p in ipairs(Players:GetPlayers()) do
                 if not samePlayer(p, lp) then
                     local uid = tonumber(p.UserId)
@@ -389,8 +409,8 @@ local function boot()
                         local be    = pchar and pchar:FindFirstChild("BodyEffects")
                         local ko    = be and be:FindFirstChild("K.O")
                         if ko then
-                            koConns[uid] = ko.Changed:Connect(function(val)
-                                if not val then return end
+                            local handler = function()
+                                if not ko.Value then return end
                                 if not S.autoStomp or S.stompInProgress then return end
                                 local isTarget = (S.autoKillTarget and tonumber(S.killTargetUserId) == uid)
                                               or S.autoKillAll
@@ -398,7 +418,14 @@ local function boot()
                                 if isTarget then
                                     task.spawn(function() doStomp(p) end)
                                 end
+                            end
+                            local okc, conn = pcall(function()
+                                return ko:GetPropertyChangedSignal("Value"):Connect(handler)
                             end)
+                            if not okc then
+                                okc, conn = pcall(function() return ko.Changed:Connect(handler) end)
+                            end
+                            if okc and conn then koConns[uid] = conn else koConns[uid] = true end
                         end
                     end
                 end
@@ -414,46 +441,52 @@ local function boot()
                     koConns[uid] = nil
                 end
             end
+          end)
             task.wait(2)
         end
     end)
 
     -- ─── Auto kill loop ───────────────────────────────────────────────────────
+    -- Whole body wrapped in pcall so a transient error can never freeze or stop
+    -- the loop (a stuck loop with no yield is what crashes the client).
     task.spawn(function()
         local lastAutoAt = 0
         while S.running do
-            local now = tick()
-            if (S.killOnSight or S.autoKillAll or S.autoKillTarget) and now - lastAutoAt >= S.autoKillInterval then
-                lastAutoAt = now
+            local ok, err = pcall(function()
+                local now = tick()
+                if (S.killOnSight or S.autoKillAll or S.autoKillTarget) and now - lastAutoAt >= S.autoKillInterval then
+                    lastAutoAt = now
 
-                if S.killOnSight then
-                    local root = getRoot()
-                    if root then
-                        local inRange = {}
-                        for _, p in ipairs(Players:GetPlayers()) do
-                            if not samePlayer(p, lp) and not isFriendly(p) then
-                                local pchar = p.Character
-                                local pr    = pchar and pchar:FindFirstChild("HumanoidRootPart")
-                                if pr and (pr.Position - root.Position).Magnitude <= S.killOnSightRange then
-                                    local _, valid = getKillTarget(p)
-                                    if valid then inRange[#inRange + 1] = p end
+                    if S.killOnSight then
+                        local root = getRoot()
+                        if root then
+                            local inRange = {}
+                            for _, p in ipairs(Players:GetPlayers()) do
+                                if not samePlayer(p, lp) and not isFriendly(p) then
+                                    local pchar = p.Character
+                                    local pr    = pchar and pchar:FindFirstChild("HumanoidRootPart")
+                                    if pr and (pr.Position - root.Position).Magnitude <= S.killOnSightRange then
+                                        local _, valid = getKillTarget(p)
+                                        if valid then inRange[#inRange + 1] = p end
+                                    end
                                 end
                             end
+                            if #inRange > 0 then killPlayers(inRange, "sight") end
                         end
-                        if #inRange > 0 then killPlayers(inRange, "sight") end
-                    end
-                elseif S.autoKillAll then
-                    killPlayers(Players:GetPlayers(), "auto-all")
-                elseif S.autoKillTarget then
-                    if S.autoRetarget then autoRetargetIfDead() end
-                    local p = getSelectedPlayer()
-                    if p then
-                        local _, valid = getKillTarget(p)
-                        if valid then killPlayers({ p }, "auto") end
+                    elseif S.autoKillAll then
+                        killPlayers(getKillCandidates(), "auto-all")
+                    elseif S.autoKillTarget then
+                        if S.autoRetarget then autoRetargetIfDead() end
+                        local p = getSelectedPlayer()
+                        if p then
+                            local _, valid = getKillTarget(p)
+                            if valid then killPlayers({ p }, "auto") end
+                        end
                     end
                 end
-            end
-            task.wait(0.1)
+            end)
+            if not ok then S.killAllStatus = "loop err: " .. tostring(err) end
+            task.wait(0.15)
         end
     end)
 
