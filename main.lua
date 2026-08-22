@@ -90,6 +90,7 @@ local function boot()
         killAllStatus = "idle",
         killInProgress = false,
         resetKey = "F",
+        resetActive = false,
         lastKillAllAt = 0,
         killTargetUserId = nil,
         killTargetName = "none",
@@ -1169,41 +1170,124 @@ local function boot()
         notifyUser("Better Void", "panic stopped", "warning")
     end
 
-    local function forceReset()
-        panic()
-
-        local char = lp and lp.Character
-        local hum = getHumanoid()
-        local root = getRoot()
-
-        if root then
-            pcall(function()
-                root.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
-                root.CanCollide = true
-            end)
+    local function getCharacterHumanoid(char)
+        if not char then
+            return nil
         end
 
-        local reset = false
+        local hum = nil
+        pcall(function()
+            hum = char:FindFirstChildOfClass("Humanoid")
+        end)
+        return hum or char:FindFirstChild("Humanoid")
+    end
+
+    local function getCharacterRoot(char)
+        return char and (char:FindFirstChild("HumanoidRootPart") or char:FindFirstChild("UpperTorso") or char:FindFirstChild("Torso"))
+    end
+
+    local function characterStillAlive(char)
+        if not char or not lp or lp.Character ~= char then
+            return false
+        end
+
+        local hum = getCharacterHumanoid(char)
+        if not hum then
+            return true
+        end
+
+        local health = tonumber(hum.Health)
+        return health == nil or health > 0
+    end
+
+    local function requestResetPulse(char)
+        local hum = getCharacterHumanoid(char)
+        local root = getCharacterRoot(char)
+
         if hum then
-            reset = pcall(function()
+            pcall(function()
+                if hum.UnequipTools then
+                    hum:UnequipTools()
+                end
+            end)
+            pcall(function()
+                hum.BreakJointsOnDeath = true
+            end)
+            pcall(function()
+                if Enum and Enum.HumanoidStateType and hum.SetStateEnabled then
+                    hum:SetStateEnabled(Enum.HumanoidStateType.Dead, true)
+                end
+            end)
+            pcall(function()
                 hum.Health = 0
             end)
+            pcall(function()
+                if hum.TakeDamage then
+                    hum:TakeDamage(1000000000)
+                end
+            end)
+            pcall(function()
+                if Enum and Enum.HumanoidStateType and hum.ChangeState then
+                    hum:ChangeState(Enum.HumanoidStateType.Dead)
+                end
+            end)
         end
 
-        if char and not reset then
-            reset = pcall(function()
+        if char then
+            pcall(function()
                 char:BreakJoints()
             end)
         end
 
-        if not reset and root then
-            reset = pcall(function()
-                root.CFrame = CFrame.new(root.Position.X, -500, root.Position.Z)
+        if root then
+            pcall(function()
+                root.AssemblyLinearVelocity = Vector3.new(0, -2500, 0)
+                root.CanCollide = false
+                root.CFrame = CFrame.new(root.Position.X, root.Position.Y - 1000, root.Position.Z)
             end)
         end
+    end
 
-        notifyUser("Force reset", reset and "reset requested" or "reset failed", reset and "success" or "error")
-        return reset
+    local function forceReset()
+        if S.resetActive then
+            notifyUser("Force reset", "already resetting", "warning")
+            return false
+        end
+
+        panic()
+
+        local char = lp and lp.Character
+        if not char then
+            notifyUser("Force reset", "character missing", "error")
+            return false
+        end
+
+        S.resetActive = true
+        notifyUser("Force reset", "reset requested", "warning")
+
+        task.spawn(function()
+            local deadline = tick() + 1.25
+            local reset = false
+
+            while S.running and tick() < deadline do
+                if not characterStillAlive(char) then
+                    reset = true
+                    break
+                end
+
+                requestResetPulse(char)
+                task.wait(0.08)
+            end
+
+            if not reset and not characterStillAlive(char) then
+                reset = true
+            end
+
+            S.resetActive = false
+            notifyUser("Force reset", reset and "respawn triggered" or "reset did not take", reset and "success" or "error")
+        end)
+
+        return true
     end
 
     local function saveReturnMarker()
