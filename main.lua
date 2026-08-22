@@ -601,8 +601,7 @@ local function boot()
     S.killAllExcept = killAllExcept
 
     -- ─── Auto stomp ──────────────────────────────────────────────────────────
-    local koConns = {}
-
+    -- Teleport onto a KO'd body and stomp. Choke point: one stomp at a time.
     local function doStomp(targetPlayer)
         if S.stompInProgress then return end
         local char       = targetPlayer and targetPlayer.Character
@@ -626,58 +625,9 @@ local function boot()
             pcall(function() remote:FireServer("Stomp") end)
         end
 
-        task.wait(0.9)
+        task.wait(0.6)
         S.stompInProgress = false
     end
-
-    -- Watch for KO changes on all enemy players
-    task.spawn(function()
-        while S.running do
-          pcall(function()
-            for _, p in ipairs(Players:GetPlayers()) do
-                if not samePlayer(p, lp) then
-                    local uid = tonumber(p.UserId)
-                    if uid and not koConns[uid] then
-                        local pchar = p.Character
-                        local be    = pchar and pchar:FindFirstChild("BodyEffects")
-                        local ko    = be and be:FindFirstChild("K.O")
-                        if ko then
-                            local handler = function()
-                                if not ko.Value then return end
-                                if not S.autoStomp or S.stompInProgress then return end
-                                local isTarget = (S.autoKillTarget and tonumber(S.killTargetUserId) == uid)
-                                              or S.autoKillAll
-                                              or S.killOnSight
-                                if isTarget then
-                                    task.spawn(function() doStomp(p) end)
-                                end
-                            end
-                            local okc, conn = pcall(function()
-                                return ko:GetPropertyChangedSignal("Value"):Connect(handler)
-                            end)
-                            if not okc then
-                                okc, conn = pcall(function() return ko.Changed:Connect(handler) end)
-                            end
-                            if okc and conn then koConns[uid] = conn else koConns[uid] = true end
-                        end
-                    end
-                end
-            end
-            -- Cleanup players who left
-            for uid in pairs(koConns) do
-                local found = false
-                for _, p in ipairs(Players:GetPlayers()) do
-                    if tonumber(p.UserId) == uid then found = true; break end
-                end
-                if not found then
-                    pcall(function() koConns[uid]:Disconnect() end)
-                    koConns[uid] = nil
-                end
-            end
-          end)
-            task.wait(2)
-        end
-    end)
 
     -- ─── Auto kill loop ───────────────────────────────────────────────────────
     -- Whole body wrapped in pcall so a transient error can never freeze or stop
@@ -689,14 +639,47 @@ local function boot()
         return out
     end
 
+    -- State of the selected target: is the character alive / KO'd right now?
+    local function targetState(char)
+        local hum = char and (char:FindFirstChild("Humanoid") or char:FindFirstChildOfClass("Humanoid"))
+        local be  = char and char:FindFirstChild("BodyEffects")
+        local ko  = be and be:FindFirstChild("K.O")
+        local alive = hum ~= nil and (tonumber(hum.Health) or 0) > 0
+        local koed  = ko ~= nil and ko.Value == true
+        return alive, koed
+    end
+
     task.spawn(function()
-        local lastAutoAt = 0
+        local lastMassAt   = 0     -- kill throttle for all/sight modes
+        local lastTgtKillAt = 0    -- kill throttle for the selected target
+        local stompedThisKO = false
         while S.running do
             local ok, err = pcall(function()
                 local now = tick()
-                if (S.killOnSight or S.autoKillAll or S.autoKillTarget) and now - lastAutoAt >= S.autoKillInterval then
-                    lastAutoAt = now
 
+                if S.autoKillTarget then
+                    -- Continuous cycle on ONE target: kill while up, stomp once
+                    -- when KO'd, then re-kill instantly the moment it respawns.
+                    if S.autoRetarget then autoRetargetIfDead() end
+                    local p = getSelectedPlayer()
+                    if p then
+                        local alive, koed = targetState(p.Character)
+                        if koed then
+                            if S.autoStomp and not stompedThisKO and not S.stompInProgress then
+                                stompedThisKO = true
+                                task.spawn(function() doStomp(p) end)
+                            end
+                        elseif alive then
+                            stompedThisKO = false      -- respawned / back up
+                            if now - lastTgtKillAt >= S.autoKillInterval then
+                                lastTgtKillAt = now
+                                killPlayers({ p }, "auto", false, true)
+                            end
+                        end
+                    end
+
+                elseif (S.killOnSight or S.autoKillAll) and now - lastMassAt >= S.autoKillInterval then
+                    lastMassAt = now
                     if S.killOnSight then
                         local root = getRoot()
                         if root then
@@ -713,20 +696,13 @@ local function boot()
                             end
                             if #inRange > 0 then killPlayers(capTargets(inRange), "sight", false, true) end
                         end
-                    elseif S.autoKillAll then
+                    else
                         killPlayers(capTargets(getKillCandidates()), "auto-all", false, true)
-                    elseif S.autoKillTarget then
-                        if S.autoRetarget then autoRetargetIfDead() end
-                        local p = getSelectedPlayer()
-                        if p then
-                            local _, valid = getKillTarget(p)
-                            if valid then killPlayers({ p }, "auto", false, true) end
-                        end
                     end
                 end
             end)
             if not ok then S.killAllStatus = "loop err: " .. tostring(err) end
-            task.wait(0.15)
+            task.wait(0.1)
         end
     end)
 
