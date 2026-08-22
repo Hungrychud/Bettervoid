@@ -290,6 +290,39 @@ local function boot()
     local resolveRemotes = resolveKillAllRemotes -- alias used by auto-stomp
 
     -- ─── Kill core (backup port) ───────────────────────────────────────────────
+    -- Any gun works. Prefer the one already in hand (no swap = consistent);
+    -- Tactical is the best multi-target so it wins as a backpack pick.
+    local GUN_PRIORITY = { "[TacticalShotgun]", "[Double-Barrel SG]", "[Revolver]" }
+
+    local function isUsableGun(item)
+        return item and item.ClassName == "Tool" and GUN_NAMES[item.Name]
+           and item:FindFirstChild("Handle") and item:FindFirstChild("Ammo")
+    end
+
+    local function getEquippedGun(character)
+        if not character then return nil end
+        for _, item in ipairs(character:GetChildren()) do
+            if isUsableGun(item) then return item end
+        end
+        return nil
+    end
+
+    -- Returns tool, wasEquipped
+    local function getBestGun(character, backpack)
+        local eq = getEquippedGun(character)
+        if eq then return eq, true end
+        for _, name in ipairs(GUN_PRIORITY) do
+            local t = backpack and backpack:FindFirstChild(name)
+            if isUsableGun(t) then return t, false end
+        end
+        if backpack then
+            for _, item in ipairs(backpack:GetChildren()) do
+                if isUsableGun(item) then return item, false end
+            end
+        end
+        return nil, false
+    end
+
     local function getTacticalShotgun(character, backpack)
         return (backpack and backpack:FindFirstChild("[TacticalShotgun]"))
             or (character and character:FindFirstChild("[TacticalShotgun]"))
@@ -438,26 +471,10 @@ local function boot()
         if not remote then S.killAllStatus = "kill remote missing"; return false end
         if not character or not backpack then S.killAllStatus = "character missing"; return false end
 
-        local tool = getTacticalShotgun(character, backpack)
+        local tool, wasEquipped = getBestGun(character, backpack)
         if not tool then
             requestLoadout()
-            S.killAllStatus = "tactical requested"
-            return false
-        end
-
-        local handle = tool:FindFirstChild("Handle")
-        local ammo = tool:FindFirstChild("Ammo")
-        if ammo and (tonumber(ammo.Value) or 0) <= 0 then
-            local refilledTool = requestAmmoRefill(tool, ammo)
-            if refilledTool then
-                tool = refilledTool
-                handle = tool:FindFirstChild("Handle")
-                ammo = tool:FindFirstChild("Ammo")
-            end
-        end
-
-        if not handle or not usableAmmo(tool, ammo) then
-            S.killAllStatus = not handle and "handle missing" or "ammo refill requested"
+            S.killAllStatus = "no gun (loadout requested)"
             return false
         end
 
@@ -471,21 +488,19 @@ local function boot()
         local damageObject = tool:FindFirstChild("Damage")
         local range = rangeObject and (tonumber(rangeObject.Value) or 200) or 200
         local damage = damageObject and (tonumber(damageObject.Value) or 50) or 50
-        local wasEquipped = tool.Parent == character
-        local previousTool = wasEquipped and nil or getEquippedTool(character)
         local humanoid = getHumanoid()
 
-        if not equipKillTool(tool, character, humanoid) then
-            S.killAllStatus = "equip failed"
-            return false
+        -- Equip only if empty-handed, then LEAVE it equipped afterwards. No
+        -- unequip / loadout-swap, which is what glitched the player's own gun.
+        if not wasEquipped then
+            if not equipKillTool(tool, character, humanoid) then
+                S.killAllStatus = "equip failed"
+                return false
+            end
         end
 
-        handle = tool:FindFirstChild("Handle")
-        if not handle then
-            restoreKillTool(tool, previousTool, character, backpack, wasEquipped)
-            S.killAllStatus = "handle missing"
-            return false
-        end
+        local handle = tool:FindFirstChild("Handle")
+        if not handle then S.killAllStatus = "handle missing"; return false end
 
         local fired = 0
         for shot = 1, burst do
@@ -500,9 +515,7 @@ local function boot()
             if shot < burst then task.wait(SHOT_DELAY) end
         end
 
-        restoreKillTool(tool, previousTool, character, backpack, wasEquipped)
-        -- Re-enable the player's own gun: clear any stuck reload/cooldown state
-        -- the kill may have left behind.
+        -- Keep the player's own gun ready to shoot.
         clearGunState(tool)
 
         S.killAllStatus = (label and (label .. ": ") or "") .. "fired " .. tostring(fired) .. "x / " .. tostring(targetCount) .. " target(s)"
@@ -935,11 +948,12 @@ local function boot()
         killAuto:Toggle("Auto stomp KO'd targets", S.autoStomp, function(on)
             S.autoStomp = on and true or false
         end)
-        killAuto:Slider("Kill interval", S.autoKillInterval, 0.5, 0.5, 30, "s", function(v)
-            S.autoKillInterval = math.max(0.5, math.min(30, v))
+        -- Slider(name, default, min, max, step, suffix, cb)
+        killAuto:Slider("Kill interval", S.autoKillInterval, 0.5, 30, 0.5, "s", function(v)
+            S.autoKillInterval = math.max(0.5, math.min(30, tonumber(v) or S.autoKillInterval))
         end)
-        killAuto:Slider("Sight range", S.killOnSightRange, 50, 50, 5000, " studs", function(v)
-            S.killOnSightRange = math.floor(v)
+        killAuto:Slider("Sight range", S.killOnSightRange, 50, 5000, 50, " studs", function(v)
+            S.killOnSightRange = math.floor(tonumber(v) or S.killOnSightRange)
         end)
 
         -- STATUS
