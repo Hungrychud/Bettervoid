@@ -56,6 +56,7 @@ local function boot()
         "armorCooldown",
         "armorTriggerRatio",
         "killAllCooldown",
+        "resetKey",
         "hasReturnMarker",
         "returnX",
         "returnY",
@@ -88,6 +89,7 @@ local function boot()
         killAllCooldown = 1.5,
         killAllStatus = "idle",
         killInProgress = false,
+        resetKey = "F",
         lastKillAllAt = 0,
         killTargetUserId = nil,
         killTargetName = "none",
@@ -154,6 +156,32 @@ local function boot()
         end
     end
 
+    local function normalizeKeyName(value, fallback)
+        local text = tostring(value or ""):match("^%s*(.-)%s*$")
+        if text == "" then
+            text = fallback or "F"
+        end
+
+        text = string.gsub(text, "%s+", "")
+        if #text == 1 then
+            return string.upper(text)
+        end
+
+        return string.upper(string.sub(text, 1, 1)) .. string.lower(string.sub(text, 2))
+    end
+
+    local function pollCodeForKeyName(value)
+        local key = normalizeKeyName(value, "")
+        if #key == 1 then
+            local byte = string.byte(string.lower(key))
+            if byte then
+                return byte
+            end
+        end
+
+        return nil
+    end
+
     local function clampSettings()
         S.height = math.max(100, math.min(100000, tonumber(S.height) or 100000))
         S.rate = math.max(0.03, math.min(0.5, tonumber(S.rate) or 0.08))
@@ -165,6 +193,10 @@ local function boot()
         S.armorCooldown = math.max(2, math.min(60, tonumber(S.armorCooldown) or 8))
         S.armorTriggerRatio = math.max(0.1, math.min(1, tonumber(S.armorTriggerRatio) or 0.95))
         S.killAllCooldown = math.max(0.5, math.min(10, tonumber(S.killAllCooldown) or 1.5))
+        S.resetKey = normalizeKeyName(S.resetKey, "F")
+        if S.resetKey == "V" or S.resetKey == "K" or S.resetKey == "L" then
+            S.resetKey = "F"
+        end
         S.returnX = tonumber(S.returnX) or 0
         S.returnY = tonumber(S.returnY) or 0
         S.returnZ = tonumber(S.returnZ) or 0
@@ -210,6 +242,8 @@ local function boot()
                     if value then
                         S[key] = value
                     end
+                elseif kind == "string" then
+                    S[key] = raw
                 end
             end
         end
@@ -1070,6 +1104,7 @@ local function boot()
         if handles.armorTriggerRatio and handles.armorTriggerRatio.Set then pcall(function() handles.armorTriggerRatio:Set(S.armorTriggerRatio) end) end
         if handles.killAllCooldown and handles.killAllCooldown.Set then pcall(function() handles.killAllCooldown:Set(S.killAllCooldown) end) end
         if handles.killTargetName then pcall(function() handles.killTargetName.Value = S.killTargetInput or "" end) end
+        if handles.resetKey then pcall(function() handles.resetKey.Value = S.resetKey or "F" end) end
 
         if roamToggle and roamToggle.Set then pcall(function() roamToggle:Set(S.roam) end) end
         if overlayToggle and overlayToggle.Set then pcall(function() overlayToggle:Set(S.showOverlay) end) end
@@ -1132,6 +1167,43 @@ local function boot()
         end
 
         notifyUser("Better Void", "panic stopped", "warning")
+    end
+
+    local function forceReset()
+        panic()
+
+        local char = lp and lp.Character
+        local hum = getHumanoid()
+        local root = getRoot()
+
+        if root then
+            pcall(function()
+                root.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
+                root.CanCollide = true
+            end)
+        end
+
+        local reset = false
+        if hum then
+            reset = pcall(function()
+                hum.Health = 0
+            end)
+        end
+
+        if char and not reset then
+            reset = pcall(function()
+                char:BreakJoints()
+            end)
+        end
+
+        if not reset and root then
+            reset = pcall(function()
+                root.CFrame = CFrame.new(root.Position.X, -500, root.Position.Z)
+            end)
+        end
+
+        notifyUser("Force reset", reset and "reset requested" or "reset failed", reset and "success" or "error")
+        return reset
     end
 
     local function saveReturnMarker()
@@ -1230,6 +1302,7 @@ local function boot()
     function S.killTarget(target) return killNamedTarget(target) end
     function S.buyArmor() return buyArmor(true) end
     function S.panic() panic() end
+    function S.forceReset() return forceReset() end
     function S.saveReturnMarker() return saveReturnMarker() end
     function S.returnToMarker() return returnToMarker() end
     function S.saveConfig()
@@ -1538,6 +1611,8 @@ local function boot()
                     task.spawn(function() S.killAll() end)
                 elseif keyMatches(input, "L", KEY_KILL_SELECTED) then
                     task.spawn(function() S.killSelectedTarget() end)
+                elseif keyMatches(input, S.resetKey or "F", pollCodeForKeyName(S.resetKey)) then
+                    forceReset()
                 end
             end)
         end)
@@ -1805,6 +1880,21 @@ local function boot()
             notifyUser("Config", ok and "loaded" or ("load failed: " .. tostring(err)), ok and "success" or "error")
         end)
         utilities:Button("Panic stop", function() panic() end):SetRisk()
+        utilities:Button("Force reset self", function() forceReset() end):SetRisk()
+        handles.resetKey = utilities:Textbox("Force reset key", S.resetKey or "F", function(value)
+            local key = normalizeKeyName(value, "F")
+            if key == "V" or key == "K" or key == "L" then
+                notifyUser("Force reset", "V, K and L are reserved", "warning")
+                key = S.resetKey or "F"
+            end
+            S.resetKey = key
+            if handles.resetKey then
+                pcall(function()
+                    handles.resetKey.Value = S.resetKey
+                end)
+            end
+            notifyUser("Force reset", "key set to " .. tostring(S.resetKey), "success")
+        end, "Example: F")
         utilities:Button("Unload", function() S.unload() end):SetRisk()
 
         status:Label(function() return "Void: " .. (S.enabled and "ON" or "OFF") end)
@@ -1826,7 +1916,8 @@ local function boot()
             return "Y position: " .. (root and tostring(math.floor(root.Position.Y)) or "none")
         end)
         status:Label(function() return "Marker: " .. (S.hasReturnMarker and "saved" or "none") end)
-        status:Info("P menu, V void, K kill all, L selected kill, mouse wheel target.")
+        status:Label(function() return "Force reset key: " .. tostring(S.resetKey or "F") end)
+        status:Info("P menu, V void, K kill all, L selected kill, reset key, mouse wheel target.")
         killStatus:Label(function() return "Target: " .. tostring(S.killTargetName or "none") end)
         killStatus:Label(function() return "Typed name: " .. tostring(S.killTargetInput or "") end)
         killStatus:Label(function() return "Status: " .. tostring(S.killAllStatus) end)
@@ -1934,6 +2025,8 @@ local function boot()
                 if pressed(118) then setEnabled(not S.enabled, true) end
                 if pressed(KEY_KILL_ALL) then task.spawn(function() S.killAll() end) end
                 if pressed(KEY_KILL_SELECTED) then task.spawn(function() S.killSelectedTarget() end) end
+                local resetCode = pollCodeForKeyName(S.resetKey)
+                if resetCode and pressed(resetCode) then forceReset() end
             end
             task.wait(0.03)
         end
