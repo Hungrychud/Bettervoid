@@ -56,6 +56,12 @@ local function boot()
         "armorCooldown",
         "armorTriggerRatio",
         "killAllCooldown",
+        "autoKillTarget",
+        "autoKillAll",
+        "autoKillInterval",
+        "killOnSight",
+        "killOnSightRange",
+        "autoRetarget",
         "resetKey",
         "hasReturnMarker",
         "returnX",
@@ -87,6 +93,12 @@ local function boot()
         armorStatus = "idle",
         armorSafeMode = true,
         killAllCooldown = 0.8,
+        autoKillTarget = false,
+        autoKillAll = false,
+        autoKillInterval = 2.0,
+        killOnSight = false,
+        killOnSightRange = 500,
+        autoRetarget = false,
         killAllStatus = "idle",
         killInProgress = false,
         resetKey = "F",
@@ -118,6 +130,10 @@ local function boot()
     local roamToggle
     local overlayToggle
     local autoArmorToggle
+    local autoKillTargetToggle
+    local autoKillAllToggle
+    local killOnSightToggle
+    local autoRetargetToggle
     local handles = {}
     local overlay = { items = {} }
     local syncingToggle = false
@@ -194,6 +210,8 @@ local function boot()
         S.armorCooldown = math.max(2, math.min(60, tonumber(S.armorCooldown) or 8))
         S.armorTriggerRatio = math.max(0.1, math.min(1, tonumber(S.armorTriggerRatio) or 0.95))
         S.killAllCooldown = math.max(0.3, math.min(10, tonumber(S.killAllCooldown) or 0.8))
+        S.autoKillInterval = math.max(0.5, math.min(30, tonumber(S.autoKillInterval) or 2.0))
+        S.killOnSightRange = math.max(50, math.min(5000, tonumber(S.killOnSightRange) or 500))
         S.resetKey = normalizeKeyName(S.resetKey, "F")
         if S.resetKey == "V" or S.resetKey == "K" or S.resetKey == "L" then
             S.resetKey = "F"
@@ -649,11 +667,24 @@ local function boot()
             return nil
         end
 
+        local root = getRoot()
         local candidates = {}
         for _, player in ipairs(Players:GetPlayers()) do
             if not samePlayer(player, lp) and not isFriendlyWhitelisted(player) then
                 candidates[#candidates + 1] = player
             end
+        end
+
+        if root and #candidates > 1 then
+            table.sort(candidates, function(a, b)
+                local ca = a.Character
+                local cb = b.Character
+                local ra = ca and ca:FindFirstChild("HumanoidRootPart")
+                local rb = cb and cb:FindFirstChild("HumanoidRootPart")
+                if not ra then return false end
+                if not rb then return true end
+                return (ra.Position - root.Position).Magnitude < (rb.Position - root.Position).Magnitude
+            end)
         end
 
         return candidates
@@ -914,21 +945,43 @@ local function boot()
         return fired > 0
     end
 
-    local function killPlayers(targetPlayers, label)
-        if S.killInProgress then
+    local function killPlayers(targetPlayers, label, _isRetry)
+        if S.killInProgress and not _isRetry then
             S.killAllStatus = "already firing"
             return false
         end
 
-        S.killInProgress = true
+        if not _isRetry then S.killInProgress = true end
         local ok, result = pcall(function()
             return runKillPlayers(targetPlayers, label)
         end)
-        S.killInProgress = false
+        if not _isRetry then S.killInProgress = false end
 
         if not ok then
             S.killAllStatus = "kill error"
             return false
+        end
+
+        if result and not _isRetry then
+            local retryTargets = targetPlayers
+            local retryLabel = label
+            task.spawn(function()
+                task.wait(0.35)
+                if S.killInProgress then return end
+                local survivors = {}
+                for _, player in ipairs(retryTargets or {}) do
+                    local _, valid = getKillTarget(player)
+                    if valid then survivors[#survivors + 1] = player end
+                end
+                if #survivors > 0 then
+                    S.lastKillAllAt = 0
+                    S.killInProgress = true
+                    pcall(function()
+                        runKillPlayers(survivors, retryLabel and (retryLabel .. "-r") or "retry")
+                    end)
+                    S.killInProgress = false
+                end
+            end)
         end
 
         return result
@@ -957,6 +1010,51 @@ local function boot()
 
         setKillTarget(player)
         return killPlayers({ player }, getKillTargetName(player))
+    end
+
+    local function selectNearestKillTarget()
+        local candidates = getKillCandidates()
+        if not candidates or #candidates == 0 then
+            S.killAllStatus = "no targets"
+            return false
+        end
+        for _, player in ipairs(candidates) do
+            local _, valid = getKillTarget(player)
+            if valid then
+                return setKillTarget(player)
+            end
+        end
+        S.killAllStatus = "no living targets"
+        return false
+    end
+
+    local function autoRetargetIfDead()
+        if not S.killTargetUserId then return end
+        local player = getSelectedKillPlayer()
+        local _, valid = player and getKillTarget(player) or nil, false
+        if not valid then
+            local changed = selectNearestKillTarget()
+            if changed then
+                notifyUser("Auto re-target", tostring(S.killTargetName), "info")
+            end
+        end
+    end
+
+    local function killAllExceptSelected()
+        local selectedUserId = tonumber(S.killTargetUserId)
+        local targets = {}
+        for _, player in ipairs(Players and Players:GetPlayers() or {}) do
+            if not samePlayer(player, lp) and not isFriendlyWhitelisted(player) then
+                if not selectedUserId or tonumber(player.UserId) ~= selectedUserId then
+                    targets[#targets + 1] = player
+                end
+            end
+        end
+        if #targets == 0 then
+            S.killAllStatus = "no targets"
+            return false
+        end
+        return killPlayers(targets, "all-except")
     end
 
     local ARMOR_FALLBACK_POSITIONS = {
@@ -1115,9 +1213,15 @@ local function boot()
         if handles.killTargetName then pcall(function() handles.killTargetName.Value = S.killTargetInput or "" end) end
         if handles.resetKey then pcall(function() handles.resetKey.Value = S.resetKey or "F" end) end
 
+        if handles.autoKillInterval and handles.autoKillInterval.Set then pcall(function() handles.autoKillInterval:Set(S.autoKillInterval) end) end
+        if handles.killOnSightRange and handles.killOnSightRange.Set then pcall(function() handles.killOnSightRange:Set(S.killOnSightRange) end) end
         if roamToggle and roamToggle.Set then pcall(function() roamToggle:Set(S.roam) end) end
         if overlayToggle and overlayToggle.Set then pcall(function() overlayToggle:Set(S.showOverlay) end) end
         if autoArmorToggle and autoArmorToggle.Set then pcall(function() autoArmorToggle:Set(S.autoArmor) end) end
+        if autoKillTargetToggle and autoKillTargetToggle.Set then pcall(function() autoKillTargetToggle:Set(S.autoKillTarget) end) end
+        if autoKillAllToggle and autoKillAllToggle.Set then pcall(function() autoKillAllToggle:Set(S.autoKillAll) end) end
+        if killOnSightToggle and killOnSightToggle.Set then pcall(function() killOnSightToggle:Set(S.killOnSight) end) end
+        if autoRetargetToggle and autoRetargetToggle.Set then pcall(function() autoRetargetToggle:Set(S.autoRetarget) end) end
     end
 
     local function setEnabled(on, syncToggle)
@@ -1165,7 +1269,13 @@ local function boot()
     local function panic()
         setEnabled(false, true)
         S.roam = false
+        S.autoKillTarget = false
+        S.autoKillAll = false
+        S.killOnSight = false
         if roamToggle and roamToggle.Set then pcall(function() roamToggle:Set(false) end) end
+        if autoKillTargetToggle and autoKillTargetToggle.Set then pcall(function() autoKillTargetToggle:Set(false) end) end
+        if autoKillAllToggle and autoKillAllToggle.Set then pcall(function() autoKillAllToggle:Set(false) end) end
+        if killOnSightToggle and killOnSightToggle.Set then pcall(function() killOnSightToggle:Set(false) end) end
 
         local root = getRoot()
         if root then
@@ -1380,8 +1490,10 @@ local function boot()
         if autoArmorToggle and autoArmorToggle.Set then pcall(function() autoArmorToggle:Set(S.autoArmor) end) end
     end
     function S.killAll() return killAll() end
+    function S.killAllExceptSelected() return killAllExceptSelected() end
     function S.nextKillTarget() return selectNextKillTarget() end
     function S.previousKillTarget() return selectPreviousKillTarget() end
+    function S.selectNearestKillTarget() return selectNearestKillTarget() end
     function S.openPeopleFinder() return openPeopleFinder() end
     function S.clearKillTarget() return clearKillTarget() end
     function S.setKillTarget(target)
@@ -1392,6 +1504,18 @@ local function boot()
     end
     function S.killSelectedTarget() return killSelectedTarget() end
     function S.killTarget(target) return killNamedTarget(target) end
+    function S.setAutoKillTarget(on)
+        S.autoKillTarget = on and true or false
+        if autoKillTargetToggle and autoKillTargetToggle.Set then pcall(function() autoKillTargetToggle:Set(S.autoKillTarget) end) end
+    end
+    function S.setAutoKillAll(on)
+        S.autoKillAll = on and true or false
+        if autoKillAllToggle and autoKillAllToggle.Set then pcall(function() autoKillAllToggle:Set(S.autoKillAll) end) end
+    end
+    function S.setKillOnSight(on)
+        S.killOnSight = on and true or false
+        if killOnSightToggle and killOnSightToggle.Set then pcall(function() killOnSightToggle:Set(S.killOnSight) end) end
+    end
     function S.buyArmor() return buyArmor(true) end
     function S.panic() panic() end
     function S.forceReset() return forceReset() end
@@ -1951,6 +2075,46 @@ local function boot()
                 notifyUser("Kill all", tostring(S.killAllStatus), ok and "success" or "warning")
             end)
         end):SetRisk()
+        killControls:Button("Kill all except selected", function()
+            task.spawn(function()
+                local ok = killAllExceptSelected()
+                notifyUser("Kill except", tostring(S.killAllStatus), ok and "success" or "warning")
+            end)
+        end):SetRisk()
+
+        killControls:Divider("Auto kill")
+        autoKillTargetToggle = killControls:Toggle("Auto kill selected target", S.autoKillTarget, function(on)
+            S.autoKillTarget = on and true or false
+            if on then S.autoKillAll = false S.killOnSight = false end
+            if autoKillAllToggle and autoKillAllToggle.Set then pcall(function() autoKillAllToggle:Set(S.autoKillAll) end) end
+            if killOnSightToggle and killOnSightToggle.Set then pcall(function() killOnSightToggle:Set(S.killOnSight) end) end
+        end)
+        autoKillAllToggle = killControls:Toggle("Auto kill all", S.autoKillAll, function(on)
+            S.autoKillAll = on and true or false
+            if on then S.autoKillTarget = false S.killOnSight = false end
+            if autoKillTargetToggle and autoKillTargetToggle.Set then pcall(function() autoKillTargetToggle:Set(S.autoKillTarget) end) end
+            if killOnSightToggle and killOnSightToggle.Set then pcall(function() killOnSightToggle:Set(S.killOnSight) end) end
+        end)
+        killOnSightToggle = killControls:Toggle("Kill on sight", S.killOnSight, function(on)
+            S.killOnSight = on and true or false
+            if on then S.autoKillTarget = false S.autoKillAll = false end
+            if autoKillTargetToggle and autoKillTargetToggle.Set then pcall(function() autoKillTargetToggle:Set(S.autoKillTarget) end) end
+            if autoKillAllToggle and autoKillAllToggle.Set then pcall(function() autoKillAllToggle:Set(S.autoKillAll) end) end
+        end)
+        autoRetargetToggle = killControls:Toggle("Auto re-target on death", S.autoRetarget, function(on)
+            S.autoRetarget = on and true or false
+        end)
+        handles.autoKillInterval = killControls:Slider("Auto kill interval", S.autoKillInterval, 0.5, 0.5, 30, "s", function(v)
+            S.autoKillInterval = math.max(0.5, math.min(30, v))
+        end)
+        handles.killOnSightRange = killControls:Slider("Sight range", S.killOnSightRange, 50, 50, 5000, " studs", function(v)
+            S.killOnSightRange = math.floor(v)
+        end)
+        killControls:Button("Select nearest target", function()
+            local ok = selectNearestKillTarget()
+            notifyUser("Kill target", ok and tostring(S.killTargetName) or tostring(S.killAllStatus), ok and "success" or "warning")
+        end)
+
         utilities:Divider("Presets")
         utilities:Button("Above map", function() applyPreset("Above map") end)
         utilities:Button("Wide roam", function() applyPreset("Wide roam") end)
@@ -2121,6 +2285,49 @@ local function boot()
                 if resetCode and pressed(resetCode) then forceReset() end
             end
             task.wait(0.03)
+        end
+    end)
+
+    task.spawn(function()
+        local lastAutoAt = 0
+        while S.running do
+            local now = tick()
+            if (S.killOnSight or S.autoKillAll or S.autoKillTarget) and (now - lastAutoAt >= S.autoKillInterval) then
+                lastAutoAt = now
+                S.lastKillAllAt = 0
+
+                if S.killOnSight then
+                    local root = getRoot()
+                    if root then
+                        local inRange = {}
+                        for _, player in ipairs(Players and Players:GetPlayers() or {}) do
+                            if not samePlayer(player, lp) and not isFriendlyWhitelisted(player) then
+                                local char = player.Character
+                                local proot = char and char:FindFirstChild("HumanoidRootPart")
+                                if proot and (proot.Position - root.Position).Magnitude <= S.killOnSightRange then
+                                    local _, valid = getKillTarget(player)
+                                    if valid then inRange[#inRange + 1] = player end
+                                end
+                            end
+                        end
+                        if #inRange > 0 then
+                            killPlayers(inRange, "sight")
+                        end
+                    end
+                elseif S.autoKillAll then
+                    killPlayers(Players and Players:GetPlayers() or {}, "auto-all")
+                elseif S.autoKillTarget then
+                    if S.autoRetarget then autoRetargetIfDead() end
+                    local player = getSelectedKillPlayer()
+                    if player then
+                        local _, valid = getKillTarget(player)
+                        if valid then
+                            killPlayers({ player }, "auto")
+                        end
+                    end
+                end
+            end
+            task.wait(0.1)
         end
     end)
 end
