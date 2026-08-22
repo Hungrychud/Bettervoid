@@ -29,6 +29,7 @@ local function boot()
         killTargetInput  = "",
         killAllStatus    = "idle",
         killInProgress   = false,
+        killInProgressAt = 0,
     }
     _G.BV = S
 
@@ -523,11 +524,16 @@ local function boot()
     end
 
     local function killPlayers(targetPlayers, label, _isRetry, light)
-        if S.killInProgress and not _isRetry then
-            S.killAllStatus = "already firing"
-            return false
+        -- Timestamp-based lock that auto-expires, so a leaked flag can never
+        -- permanently wedge kill (this was the "kill all works once" bug).
+        if not _isRetry then
+            if S.killInProgress and (tick() - (S.killInProgressAt or 0)) < 2 then
+                S.killAllStatus = "already firing"
+                return false
+            end
+            S.killInProgress = true
+            S.killInProgressAt = tick()
         end
-        if not _isRetry then S.killInProgress = true end
         -- Auto (looping) modes fire a single burst and skip the retry pass; the
         -- loop itself retries next cycle. This avoids the mass-damage remote
         -- spam that trips anticheat / kicks the client when auto-killing.
@@ -536,12 +542,14 @@ local function boot()
         if not _isRetry then S.killInProgress = false end
         if not ok then S.killAllStatus = "kill error"; return false end
 
+        -- Retry pass fires directly; runKillPlayers' own cooldown guard prevents
+        -- overlap, so it must NOT touch the shared killInProgress flag (that was
+        -- how the flag leaked true and blocked all later kills).
         if result and not _isRetry and not light then
             local retryTargets = targetPlayers
             local retryLabel = label
             task.spawn(function()
                 task.wait(0.35)
-                if S.killInProgress then return end
                 local survivors = {}
                 for _, player in ipairs(retryTargets or {}) do
                     local _, valid = getKillTarget(player)
@@ -549,11 +557,9 @@ local function boot()
                 end
                 if #survivors > 0 then
                     S.lastKillAllAt = 0
-                    S.killInProgress = true
                     pcall(function()
                         runKillPlayers(survivors, retryLabel and (retryLabel .. "-r") or "retry")
                     end)
-                    S.killInProgress = false
                 end
             end)
         end
@@ -583,6 +589,11 @@ local function boot()
         if #targets == 0 then S.killAllStatus = "no targets"; return false end
         return killPlayers(targets, "all-except")
     end
+
+    -- Expose for keybinds / external calls / debugging.
+    S.killAll       = killAll
+    S.killSelected  = killSelected
+    S.killAllExcept = killAllExcept
 
     -- ─── Auto stomp ──────────────────────────────────────────────────────────
     local koConns = {}
