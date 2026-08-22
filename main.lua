@@ -77,6 +77,35 @@ local function boot()
         return lp and lp:FindFirstChild("Backpack"), lp and lp.Character
     end
 
+    -- After an instakill the game can leave the local gun in a "reloading" /
+    -- cooldown state (esp. if the kill grabbed the tool mid manual-reload),
+    -- which makes your own gun refuse to shoot. GetCanShoot (client) gates on
+    -- BodyEffects.Reload / GunFiring, char attr ShotgunDebounce, tool attr
+    -- Cooldown, and Ammo==0. Clear them locally so manual shooting works again.
+    local function clearGunState(tool)
+        local wchar
+        pcall(function()
+            local wp = workspace:FindFirstChild("Players")
+            wchar = wp and lp and wp:FindFirstChild(lp.Name)
+        end)
+        if wchar then
+            local be = wchar:FindFirstChild("BodyEffects")
+            if be then
+                local rl = be:FindFirstChild("Reload")
+                if rl then pcall(function() rl.Value = false end) end
+                local gf = be:FindFirstChild("GunFiring")
+                if gf then pcall(function() gf.Value = false end) end
+            end
+            pcall(function() wchar:SetAttribute("ShotgunDebounce", nil) end)
+        end
+        if tool then
+            pcall(function() tool:SetAttribute("Cooldown", nil) end)
+            local ammo = tool:FindFirstChild("Ammo")
+            local maxAmmo = tool:FindFirstChild("MaxAmmo")
+            if ammo and maxAmmo then pcall(function() ammo.Value = maxAmmo.Value end) end
+        end
+    end
+
     -- ─── Player helpers ───────────────────────────────────────────────────────
     local function samePlayer(a, b)
         return a and b and tonumber(a.UserId) ~= nil and tonumber(a.UserId) == tonumber(b.UserId)
@@ -472,6 +501,9 @@ local function boot()
         end
 
         restoreKillTool(tool, previousTool, character, backpack, wasEquipped)
+        -- Re-enable the player's own gun: clear any stuck reload/cooldown state
+        -- the kill may have left behind.
+        clearGunState(tool)
 
         S.killAllStatus = (label and (label .. ": ") or "") .. "fired " .. tostring(fired) .. "x / " .. tostring(targetCount) .. " target(s)"
         return fired > 0
