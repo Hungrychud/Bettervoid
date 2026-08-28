@@ -23,6 +23,7 @@ local function boot()
         killOnSight      = false,
         autoRetarget     = false,
         autoStomp        = false,
+        autoKillAllStomp = false,
         stompInProgress  = false,
         killTargetUserId = nil,
         killTargetName   = "none",
@@ -43,6 +44,10 @@ local function boot()
     local AUTO_MAX_TARGETS   = 6
     local SHOT_DELAY         = 0.065
     local EQUIP_DELAY        = 0.06
+    -- Stomp / retreat tuning
+    local STOMP_MAX_ATTEMPTS = 4      -- re-fire Stomp until the body actually goes down
+    local SKY_HEIGHT         = 1500   -- studs straight up = out of every gun's range
+    local SKY_HOLD           = 0.7    -- seconds pinned in the sky (nobody can shoot you)
     local LOADOUT            = { "[Double-Barrel SG]", "[Revolver]", "[TacticalShotgun]", "None" }
     local GUN_NAMES          = { ["[Double-Barrel SG]"] = true, ["[Revolver]"] = true, ["[TacticalShotgun]"] = true }
 
@@ -54,6 +59,7 @@ local function boot()
     local autoKillAllToggle    = nil
     local killOnSightToggle    = nil
     local autoRetargetToggle   = nil
+    local autoKillAllStompToggle = nil
 
     -- ─── Notify ──────────────────────────────────────────────────────────────
     local function notify(title, text, kind)
@@ -601,32 +607,65 @@ local function boot()
     S.killAllExcept = killAllExcept
 
     -- ─── Auto stomp ──────────────────────────────────────────────────────────
-    -- Teleport onto a KO'd body and stomp. Choke point: one stomp at a time.
+    -- Is this character currently KO'd (down, stompable)?
+    local function koState(char)
+        local be = char and char:FindFirstChild("BodyEffects")
+        local ko = be and be:FindFirstChild("K.O")
+        return ko ~= nil and ko.Value == true
+    end
+
+    -- Teleport onto a KO'd body and stomp until it actually goes down, THEN
+    -- rocket straight up out of gun range and hold, so nobody can shoot you
+    -- during the exposed stomp moment (this was the "getting killed while
+    -- stomping" problem). Choke point: one stomp at a time.
     local function doStomp(targetPlayer)
         if S.stompInProgress then return end
-        local char       = targetPlayer and targetPlayer.Character
-        local targetRoot = char and char:FindFirstChild("HumanoidRootPart")
-        if not targetRoot then return end
-        local myRoot = getRoot()
-        if not myRoot then return end
+        if not targetPlayer then return end
 
         S.stompInProgress = true
-
-        -- Teleport directly above the KO'd body (server raycasts downward)
-        local tp = targetRoot.Position
-        pcall(function()
-            myRoot.CFrame = CFrame.new(tp.X, tp.Y + 3, tp.Z)
-        end)
-
-        task.wait(0.18) -- give server time to receive updated position
-
         local remote = resolveRemotes()
-        if remote then
-            pcall(function() remote:FireServer("Stomp") end)
+        local landed = false
+
+        for _ = 1, STOMP_MAX_ATTEMPTS do
+            if not S.running then break end
+            local char       = targetPlayer.Character
+            local targetRoot = char and char:FindFirstChild("HumanoidRootPart")
+            local myRoot     = getRoot()
+            if not targetRoot or not myRoot then break end
+
+            -- Already finished (dead / respawned / no longer KO'd)? Done.
+            if not koState(char) then landed = true break end
+
+            -- Teleport directly above the KO'd body (server raycasts downward)
+            local tp = targetRoot.Position
+            pcall(function()
+                myRoot.CFrame = CFrame.new(tp.X, tp.Y + 3, tp.Z)
+            end)
+            task.wait(0.18) -- give server time to receive updated position
+
+            if remote then pcall(function() remote:FireServer("Stomp") end) end
+            task.wait(0.5)  -- let the stomp register
+
+            -- Confirm the target is actually stomped before we leave.
+            if not koState(targetPlayer.Character) then landed = true break end
         end
 
-        task.wait(0.6)
+        -- Retreat: shoot straight up, way past any gun's range, and pin there
+        -- for a moment so no one can hit you. Then release (you drop back).
+        local myRoot = getRoot()
+        if myRoot then
+            local safe = CFrame.new(myRoot.Position + Vector3.new(0, SKY_HEIGHT, 0))
+            local deadline = tick() + SKY_HOLD
+            while S.running and tick() < deadline do
+                local r = getRoot()
+                if not r then break end
+                pcall(function() r.CFrame = safe end)
+                task.wait(0.06)
+            end
+        end
+
         S.stompInProgress = false
+        return landed
     end
 
     -- ─── Auto kill loop ───────────────────────────────────────────────────────
@@ -683,6 +722,26 @@ local function boot()
                                 killPlayers({ p }, "auto", false, false) -- full burst = faster KO
                             end
                         end
+                    end
+
+                elseif S.autoKillAllStomp then
+                    -- Kill everyone, then stomp each body that goes down (one at
+                    -- a time). doStomp confirms the stomp landed, then retreats
+                    -- you into the sky so you can't be shot mid-stomp.
+                    if not S.stompInProgress and now - lastStompAt >= 0.4 then
+                        for _, p in ipairs(getKillCandidates()) do
+                            local _, koed = targetState(p.Character)
+                            if koed then
+                                lastStompAt = now
+                                local victim = p
+                                task.spawn(function() doStomp(victim) end)
+                                break
+                            end
+                        end
+                    end
+                    if now - lastMassAt >= S.autoKillInterval then
+                        lastMassAt = now
+                        killPlayers(capTargets(getKillCandidates()), "all-stomp", false, true)
                     end
 
                 elseif (S.killOnSight or S.autoKillAll) and now - lastMassAt >= S.autoKillInterval then
@@ -936,16 +995,18 @@ local function boot()
         -- each other → stack overflow → the client freezes the instant you
         -- toggle. The guard makes nested sync calls no-op.
         local syncingModes = false
-        local function selectMode(active) -- "target" | "all" | "sight" | nil
-            S.autoKillTarget = active == "target"
-            S.autoKillAll    = active == "all"
-            S.killOnSight    = active == "sight"
+        local function selectMode(active) -- "target" | "all" | "sight" | "allstomp" | nil
+            S.autoKillTarget   = active == "target"
+            S.autoKillAll      = active == "all"
+            S.killOnSight      = active == "sight"
+            S.autoKillAllStomp = active == "allstomp"
             if syncingModes then return end
             syncingModes = true
             pcall(function()
-                if active ~= "target" and autoKillTargetToggle and autoKillTargetToggle.Set then autoKillTargetToggle:Set(false) end
-                if active ~= "all"    and autoKillAllToggle    and autoKillAllToggle.Set    then autoKillAllToggle:Set(false) end
-                if active ~= "sight"  and killOnSightToggle    and killOnSightToggle.Set    then killOnSightToggle:Set(false) end
+                if active ~= "target"   and autoKillTargetToggle   and autoKillTargetToggle.Set   then autoKillTargetToggle:Set(false) end
+                if active ~= "all"      and autoKillAllToggle      and autoKillAllToggle.Set      then autoKillAllToggle:Set(false) end
+                if active ~= "sight"    and killOnSightToggle      and killOnSightToggle.Set      then killOnSightToggle:Set(false) end
+                if active ~= "allstomp" and autoKillAllStompToggle and autoKillAllStompToggle.Set then autoKillAllStompToggle:Set(false) end
             end)
             syncingModes = false
         end
@@ -960,6 +1021,10 @@ local function boot()
         killOnSightToggle = killAuto:Toggle("Kill on sight", S.killOnSight, function(on)
             if syncingModes then S.killOnSight = on and true or false; return end
             selectMode(on and "sight" or nil)
+        end)
+        autoKillAllStompToggle = killAuto:Toggle("Auto kill all + stomp", S.autoKillAllStomp, function(on)
+            if syncingModes then S.autoKillAllStomp = on and true or false; return end
+            selectMode(on and "allstomp" or nil)
         end)
         autoRetargetToggle = killAuto:Toggle("Auto re-target on death", S.autoRetarget, function(on)
             S.autoRetarget = on and true or false
@@ -987,7 +1052,7 @@ local function boot()
             return "HP:       " .. math.floor(tonumber(hum.Health) or 0) .. "/" .. math.floor(tonumber(hum.MaxHealth) or 100)
         end)
         killStatus:Label(function()
-            local mode = S.killOnSight and "sight" or S.autoKillAll and "all" or S.autoKillTarget and "target" or "off"
+            local mode = S.killOnSight and "sight" or S.autoKillAllStomp and "all+stomp" or S.autoKillAll and "all" or S.autoKillTarget and "target" or "off"
             return "Auto:     " .. mode
         end)
         killStatus:Label(function() return "Interval: " .. tostring(S.autoKillInterval) .. "s" end)
@@ -1002,10 +1067,6 @@ local function boot()
     S.unload = function()
         S.running = false
         clearFinder()
-        for uid, conn in pairs(koConns) do
-            pcall(function() conn:Disconnect() end)
-            koConns[uid] = nil
-        end
         if scrollConn then pcall(function() scrollConn:Disconnect() end) scrollConn = nil end
         if hotkeyConn then pcall(function() hotkeyConn:Disconnect() end) hotkeyConn = nil end
         if win then
