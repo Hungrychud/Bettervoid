@@ -618,6 +618,7 @@ local function boot()
         local lastTgtKillAt = 0
         local lastStompAt   = 0
         local lastChar      = nil   -- last target character we've seen (respawn edge detect)
+        local stompedChar   = nil   -- character we've already stomped (stomp once per KO)
         while S.running do
             local ok, err = pcall(function()
                 if not S.autoKillTarget then return end
@@ -647,16 +648,25 @@ local function boot()
 
                 local alive, koed = targetState(char)
                 if koed then
-                    if not S.stompInProgress and now - lastStompAt >= 0.6 then
+                    -- Stomp this KO'd body exactly ONCE. Without this the loop
+                    -- re-fired every 0.6s while they stayed down — spamming stomps
+                    -- and yanking you back out of the sky retreat each time.
+                    if char ~= stompedChar and not S.stompInProgress and now - lastStompAt >= 0.6 then
                         lastStompAt = now
+                        stompedChar = char
                         -- If following to spawn, skip the sky retreat (we want to
                         -- drop straight onto them when they respawn, not fly away).
                         task.spawn(function() doStomp(p, not S.tpToSpawn) end)
                     end
                 elseif alive then
+                    stompedChar = nil -- back up again: allow a fresh stomp next KO
                     if now - lastTgtKillAt >= 0.35 then
                         lastTgtKillAt = now
-                        killPlayers({ p }, "auto", false, false) -- full burst = faster KO
+                        -- Single burst (1 shot, 10 head pellets = still one-shots),
+                        -- no retry. Full 3-burst + retry drained the mag every cycle,
+                        -- which forced slow loadout/reload swaps (felt slow + emptied
+                        -- ammo). One shot per cycle is fast AND ammo-cheap.
+                        killPlayers({ p }, "auto", false, true)
                     end
                 end
             end)
