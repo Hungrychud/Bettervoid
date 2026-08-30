@@ -18,6 +18,7 @@ local function boot()
         lastKillAllAt    = 0,
         autoKillTarget   = false,   -- single auto mode: kill + stomp the selected target
         stompInProgress  = false,
+        tpToSpawn        = false,   -- follow the target to their respawn point instead of retreating
         dumpOnClick      = false,   -- toggle: left-click empties the whole mag at the crosshair
         dumpInProgress   = false,
         killTargetUserId = nil,
@@ -39,7 +40,7 @@ local function boot()
     local SHOT_DELAY         = 0.065
     local EQUIP_DELAY        = 0.06
     -- Stomp / retreat tuning
-    local STOMP_MAX_ATTEMPTS = 4      -- re-fire Stomp until the body actually goes down
+    local STOMP_MAX_ATTEMPTS = 1      -- single precise stomp on the target, then done
     local SKY_HEIGHT         = 1500   -- studs straight up = out of every gun's range
     local SKY_HOLD           = 0.7    -- seconds pinned in the sky (nobody can shoot you)
     local LOADOUT            = { "[Double-Barrel SG]", "[Revolver]", "[TacticalShotgun]", "None" }
@@ -566,15 +567,17 @@ local function boot()
                 if not targetRoot or not myRoot then break end
                 if not koState(char) then break end -- done (dead / respawned / up)
 
+                -- Land exactly on the target (same XZ, just above their root) so
+                -- the server's downward stomp raycast lands precisely on them.
                 local tp = targetRoot.Position
                 pcall(function()
-                    myRoot.CFrame = CFrame.new(tp.X, tp.Y + 3, tp.Z)
+                    myRoot.CFrame = CFrame.new(tp.X, tp.Y + 2, tp.Z)
                 end)
                 task.wait(0.18) -- give the server time to receive the new position
 
                 if remote then pcall(function() remote:FireServer("Stomp") end) end
 
-                task.wait(0.5)  -- let the stomp register
+                task.wait(0.15) -- brief settle so the stomp registers before retreat
                 if not koState(targetPlayer.Character) then break end
             end
 
@@ -614,17 +617,41 @@ local function boot()
     task.spawn(function()
         local lastTgtKillAt = 0
         local lastStompAt   = 0
+        local lastChar      = nil   -- last target character we've seen (respawn edge detect)
         while S.running do
             local ok, err = pcall(function()
                 if not S.autoKillTarget then return end
                 local now = tick()
                 local p = getSelectedPlayer()
                 if not p then S.killAllStatus = "auto: no target"; return end
-                local alive, koed = targetState(p.Character)
+                local char = p.Character
+
+                -- Respawn follow: the target died and came back as a NEW character.
+                -- Teleport onto it (their spawn point) so we're on them the instant
+                -- they respawn. Only advance lastChar once the new body has a root,
+                -- so we don't miss the edge while it's still loading.
+                if char and char ~= lastChar then
+                    local hrp = char:FindFirstChild("HumanoidRootPart")
+                    if hrp then
+                        if S.tpToSpawn then
+                            local myRoot = getRoot()
+                            if myRoot then
+                                pcall(function()
+                                    myRoot.CFrame = CFrame.new(hrp.Position + Vector3.new(0, 3, 0))
+                                end)
+                            end
+                        end
+                        lastChar = char
+                    end
+                end
+
+                local alive, koed = targetState(char)
                 if koed then
                     if not S.stompInProgress and now - lastStompAt >= 0.6 then
                         lastStompAt = now
-                        task.spawn(function() doStomp(p, true) end) -- retreat to sky after
+                        -- If following to spawn, skip the sky retreat (we want to
+                        -- drop straight onto them when they respawn, not fly away).
+                        task.spawn(function() doStomp(p, not S.tpToSpawn) end)
                     end
                 elseif alive then
                     if now - lastTgtKillAt >= 0.35 then
@@ -977,6 +1004,9 @@ local function boot()
         autoKillToggle = killControls:Toggle("Auto kill + stomp selected", S.autoKillTarget, function(on)
             S.autoKillTarget = on and true or false
             S.killAllStatus = S.autoKillTarget and "auto on" or "auto off"
+        end)
+        killControls:Toggle("TP to target on respawn", S.tpToSpawn, function(on)
+            S.tpToSpawn = on and true or false
         end)
         dumpToggle = killControls:Toggle("Click to kill (aim at player)", S.dumpOnClick, function(on)
             S.dumpOnClick = on and true or false
