@@ -739,81 +739,47 @@ local function boot()
         return text == wanted or string.sub(text, -#wanted) == wanted
     end
 
-    -- ─── Ammo dump (fire whole mag at crosshair on click) ──────────────────────
-    -- Aim = straight down the camera (crosshair). Matcha does NOT support
-    -- UIS:GetMouseLocation / mouse.Hit (both return nil), so we raycast forward
-    -- from the camera instead — that IS where the crosshair points.
-    local function getAimHit()
+    -- ─── Click-to-kill (aim at a player, click, head-snap burst) ───────────────
+    -- Same head-snap kill as "kill selected", but the target is whoever is under
+    -- your crosshair when you click. Matcha lacks GetMouseLocation / mouse.Hit
+    -- AND GetPlayerFromCharacter, so we raycast forward from the camera (that IS
+    -- the crosshair) and resolve the player by walking the hit part's ancestors
+    -- and matching against the player list (by identity or character name).
+    local function getAimPlayer()
         local cam = workspace.CurrentCamera
         if not cam then return nil end
-        local origin = cam.CFrame.Position
-        local dir    = cam.CFrame.LookVector * 5000
-        local pos, part
+        local res
         pcall(function()
             local params = RaycastParams.new()
             pcall(function() params.FilterType = Enum.RaycastFilterType.Exclude end)
             pcall(function() params.FilterDescendantsInstances = { lp.Character } end)
-            local res = workspace:Raycast(origin, dir, params)
-            if res then pos = res.Position; part = res.Instance end
+            res = workspace:Raycast(cam.CFrame.Position, cam.CFrame.LookVector * 5000, params)
         end)
-        if not pos then pos = origin + cam.CFrame.LookVector * 1000 end
-        return pos, part
-    end
-
-    local function buildAimPellets(pos, part)
-        local pellets = {}
-        for _ = 1, PELLETS_PER_TARGET do
-            local jitter = pos + Vector3.new(
-                (math.random() - 0.5) * 0.5,
-                (math.random() - 0.5) * 0.5,
-                (math.random() - 0.5) * 0.5)
-            pellets[#pellets + 1] = {
-                AimPosition = jitter,
-                Result1 = jitter,
-                Result2 = part or pos,
-                Result3 = Vector3.yAxis,
-            }
+        if not res or not res.Instance then return nil end
+        local inst = res.Instance
+        for _ = 1, 8 do
+            if not inst then break end
+            for _, pl in ipairs(Players:GetPlayers()) do
+                if not samePlayer(pl, lp) then
+                    if pl.Character == inst or inst.Name == pl.Name then return pl end
+                end
+            end
+            inst = inst.Parent
         end
-        return pellets
+        return nil
     end
 
-    -- Empty the whole magazine at the crosshair in one instant burst. Capped so
-    -- a single click can't fire an absurd number of shots (anticheat kick).
-    local DUMP_MAX_SHOTS = 12
-    local function dumpAtAim()
+    -- On click: kill the player under the crosshair with the full head-snap burst
+    -- + retry (identical to "kill selected"). dumpInProgress serializes rapid
+    -- clicks so bursts can't stack.
+    local function clickKill()
         if S.dumpInProgress then return end
         S.dumpInProgress = true
         pcall(function()
-            local remote = resolveRemotes()
-            local backpack, character = getGunContainers()
-            if not remote or not character then return end
-            local tool, wasEquipped = getBestGun(character, backpack)
-            if not tool then requestLoadout(); S.killAllStatus = "dump: no gun"; return end
-            if not wasEquipped then equipKillTool(tool, character, getHumanoid()) end
-            local handle = tool:FindFirstChild("Handle")
-            if not handle then S.killAllStatus = "dump: no handle"; return end
-            local rangeObj = tool:FindFirstChild("Range")
-            local dmgObj   = tool:FindFirstChild("Damage")
-            local ammoObj  = tool:FindFirstChild("Ammo")
-            local range  = rangeObj and (tonumber(rangeObj.Value) or 200) or 200
-            local damage = dmgObj and (tonumber(dmgObj.Value) or 50) or 50
-            local shots  = math.floor(tonumber(ammoObj and ammoObj.Value) or SHOT_BURST)
-            shots = math.max(1, math.min(DUMP_MAX_SHOTS, shots))
-            local fired = 0
-            for _ = 1, shots do
-                if not S.running then break end
-                handle = tool:FindFirstChild("Handle")
-                if not handle then break end
-                local pos, part = getAimHit()
-                if not pos then break end
-                local ok = pcall(function()
-                    remote:FireServer("ShootGun", handle, handle.Position, buildAimPellets(pos, part), nil, nil, nil, range, damage)
-                end)
-                if ok then fired = fired + 1 end
-                task.wait(SHOT_DELAY)
-            end
-            clearGunState(tool)
-            S.killAllStatus = "dumped " .. tostring(fired) .. " shots"
+            local p = getAimPlayer()
+            if not p then S.killAllStatus = "aim: no player"; return end
+            if isFriendly(p) then S.killAllStatus = "aim: friendly"; return end
+            killPlayers({ p }, p.Name)
         end)
         S.dumpInProgress = false
     end
@@ -847,7 +813,7 @@ local function boot()
             if pressed and not lmbDown then
                 lmbDown = true
                 if S.dumpOnClick and not gameInputCaptured and not S.dumpInProgress then
-                    task.spawn(dumpAtAim)
+                    task.spawn(clickKill)
                 end
             elseif not pressed then
                 lmbDown = false
@@ -997,9 +963,9 @@ local function boot()
             S.autoKillTarget = on and true or false
             S.killAllStatus = S.autoKillTarget and "auto on" or "auto off"
         end)
-        dumpToggle = killControls:Toggle("Dump full mag on click", S.dumpOnClick, function(on)
+        dumpToggle = killControls:Toggle("Click to kill (aim at player)", S.dumpOnClick, function(on)
             S.dumpOnClick = on and true or false
-            S.killAllStatus = S.dumpOnClick and "dump on" or "dump off"
+            S.killAllStatus = S.dumpOnClick and "click-kill on" or "click-kill off"
         end)
 
         -- FIRE
@@ -1029,7 +995,7 @@ local function boot()
             return "HP:       " .. math.floor(tonumber(hum.Health) or 0) .. "/" .. math.floor(tonumber(hum.MaxHealth) or 100)
         end)
         killStatus:Label(function() return "Auto:     " .. (S.autoKillTarget and "on" or "off") end)
-        killStatus:Label(function() return "Dump:     " .. (S.dumpOnClick and "on (click)" or "off") end)
+        killStatus:Label(function() return "ClickKill:" .. (S.dumpOnClick and " on" or " off") end)
         killStatus:Info("K = kill all  |  L = kill selected  |  scroll = cycle targets  |  P = menu")
 
         notify("BetterVoid", "loaded — K=kill all  L=kill selected", "success")
