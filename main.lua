@@ -644,6 +644,7 @@ local function boot()
     local scrollConn  = nil
     local hotkeyConn  = nil
     local moveConn    = nil
+    local dumpConn    = nil
     local lastScrollAt = 0
     -- The UI lib grabs ALL input while the window is open (free cursor so you can
     -- click), which kills WASD movement. We track that "captured" state and drive
@@ -739,27 +740,23 @@ local function boot()
     end
 
     -- ─── Ammo dump (fire whole mag at crosshair on click) ──────────────────────
-    -- World point + part the crosshair is over. Tries the executor mouse first,
-    -- falls back to a viewport ray + raycast (Matcha may not bind :GetMouse()).
+    -- Aim = straight down the camera (crosshair). Matcha does NOT support
+    -- UIS:GetMouseLocation / mouse.Hit (both return nil), so we raycast forward
+    -- from the camera instead — that IS where the crosshair points.
     local function getAimHit()
         local cam = workspace.CurrentCamera
         if not cam then return nil end
+        local origin = cam.CFrame.Position
+        local dir    = cam.CFrame.LookVector * 5000
         local pos, part
         pcall(function()
-            local m = lp:GetMouse()
-            if m and m.Hit then pos = m.Hit.Position; part = m.Target end
-        end)
-        if pos then return pos, part end
-        pcall(function()
-            local loc = UIS:GetMouseLocation()
-            local ray = cam:ViewportPointToRay(loc.X, loc.Y)
             local params = RaycastParams.new()
             pcall(function() params.FilterType = Enum.RaycastFilterType.Exclude end)
             pcall(function() params.FilterDescendantsInstances = { lp.Character } end)
-            local res = workspace:Raycast(ray.Origin, ray.Direction * 5000, params)
-            if res then pos = res.Position; part = res.Instance
-            else pos = ray.Origin + ray.Direction * 1000 end
+            local res = workspace:Raycast(origin, dir, params)
+            if res then pos = res.Position; part = res.Instance end
         end)
+        if not pos then pos = origin + cam.CFrame.LookVector * 1000 end
         return pos, part
     end
 
@@ -829,14 +826,6 @@ local function boot()
             local focused = false
             pcall(function() focused = UIS:GetFocusedTextBox() ~= nil end)
             if focused then return end
-            -- Dump full mag on left click. Only while the menu isn't holding the
-            -- cursor, so clicking UI buttons doesn't fire your gun.
-            local isM1 = false
-            pcall(function() isM1 = input.UserInputType == Enum.UserInputType.MouseButton1 end)
-            if isM1 then
-                if S.dumpOnClick and not gameInputCaptured then task.spawn(dumpAtAim) end
-                return
-            end
             if keyMatches(input, "K", 107) then
                 task.spawn(killAll)          -- K = instant kill all
             elseif keyMatches(input, "L", 108) then
@@ -844,6 +833,27 @@ local function boot()
             end
         end)
     end)
+
+    -- Left-click detection via iskeypressed(0x01) (VK_LBUTTON). Matcha's
+    -- UIS.InputBegan does NOT report mouse buttons reliably, so we poll the
+    -- physical button and fire on the press edge. Skipped while the menu holds
+    -- the cursor so clicking UI buttons doesn't dump your mag.
+    if type(iskeypressed) == "function" then
+        local lmbDown = false
+        dumpConn = RunService.Heartbeat:Connect(function()
+            if not S.running then return end
+            local pressed = false
+            pcall(function() pressed = iskeypressed(0x01) == true end)
+            if pressed and not lmbDown then
+                lmbDown = true
+                if S.dumpOnClick and not gameInputCaptured and not S.dumpInProgress then
+                    task.spawn(dumpAtAim)
+                end
+            elseif not pressed then
+                lmbDown = false
+            end
+        end)
+    end
 
     -- ─── People finder ────────────────────────────────────────────────────────
     local function clearFinder()
@@ -1032,6 +1042,7 @@ local function boot()
         if scrollConn then pcall(function() scrollConn:Disconnect() end) scrollConn = nil end
         if hotkeyConn then pcall(function() hotkeyConn:Disconnect() end) hotkeyConn = nil end
         if moveConn   then pcall(function() moveConn:Disconnect()   end) moveConn   = nil end
+        if dumpConn   then pcall(function() dumpConn:Disconnect()   end) dumpConn   = nil end
         if S._realSetInput then pcall(function() setrobloxinput = S._realSetInput end) pcall(S._realSetInput, true) end
         if win then
             pcall(function()
