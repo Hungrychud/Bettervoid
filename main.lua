@@ -614,58 +614,64 @@ local function boot()
         return ko ~= nil and ko.Value == true
     end
 
-    -- Teleport onto a KO'd body and stomp until it actually goes down, THEN
-    -- rocket straight up out of gun range and hold, so nobody can shoot you
-    -- during the exposed stomp moment (this was the "getting killed while
-    -- stomping" problem). Choke point: one stomp at a time.
-    local function doStomp(targetPlayer)
+    -- Teleport onto a KO'd body and stomp until it actually goes down. If
+    -- `retreat` is set, then rocket straight up out of gun range and hold, so
+    -- nobody can shoot you during the exposed stomp moment (single-target mode).
+    -- In kill-all-stomp mode everyone is already dead, so no retreat is needed.
+    -- Whole body is pcall-wrapped with a GUARANTEED reset of stompInProgress —
+    -- a leaked flag permanently blocked every future stomp (that was the "stomp
+    -- stopped working" bug). Choke point: one stomp at a time.
+    local function doStomp(targetPlayer, retreat)
         if S.stompInProgress then return end
         if not targetPlayer then return end
 
         S.stompInProgress = true
-        local remote = resolveRemotes()
-        local landed = false
+        local ok, err = pcall(function()
+            local remote = resolveRemotes()
 
-        for _ = 1, STOMP_MAX_ATTEMPTS do
-            if not S.running then break end
-            local char       = targetPlayer.Character
-            local targetRoot = char and char:FindFirstChild("HumanoidRootPart")
-            local myRoot     = getRoot()
-            if not targetRoot or not myRoot then break end
+            for _ = 1, STOMP_MAX_ATTEMPTS do
+                if not S.running then break end
+                local char       = targetPlayer.Character
+                local targetRoot = char and char:FindFirstChild("HumanoidRootPart")
+                local myRoot     = getRoot()
+                if not targetRoot or not myRoot then break end
 
-            -- Already finished (dead / respawned / no longer KO'd)? Done.
-            if not koState(char) then landed = true break end
+                -- Already finished (dead / respawned / no longer KO'd)? Done.
+                if not koState(char) then break end
 
-            -- Teleport directly above the KO'd body (server raycasts downward)
-            local tp = targetRoot.Position
-            pcall(function()
-                myRoot.CFrame = CFrame.new(tp.X, tp.Y + 3, tp.Z)
-            end)
-            task.wait(0.18) -- give server time to receive updated position
+                -- Teleport directly above the KO'd body (server raycasts down)
+                local tp = targetRoot.Position
+                pcall(function()
+                    myRoot.CFrame = CFrame.new(tp.X, tp.Y + 3, tp.Z)
+                end)
+                task.wait(0.18) -- give server time to receive updated position
 
-            if remote then pcall(function() remote:FireServer("Stomp") end) end
-            task.wait(0.5)  -- let the stomp register
+                if remote then pcall(function() remote:FireServer("Stomp") end) end
+                task.wait(0.5)  -- let the stomp register
 
-            -- Confirm the target is actually stomped before we leave.
-            if not koState(targetPlayer.Character) then landed = true break end
-        end
-
-        -- Retreat: shoot straight up, way past any gun's range, and pin there
-        -- for a moment so no one can hit you. Then release (you drop back).
-        local myRoot = getRoot()
-        if myRoot then
-            local safe = CFrame.new(myRoot.Position + Vector3.new(0, SKY_HEIGHT, 0))
-            local deadline = tick() + SKY_HOLD
-            while S.running and tick() < deadline do
-                local r = getRoot()
-                if not r then break end
-                pcall(function() r.CFrame = safe end)
-                task.wait(0.06)
+                -- Confirm the target is actually stomped before we leave.
+                if not koState(targetPlayer.Character) then break end
             end
-        end
+
+            -- Retreat: shoot straight up, past any gun's range, and pin there a
+            -- moment so no one can hit you. Then release (you drop back down).
+            if retreat then
+                local myRoot = getRoot()
+                if myRoot then
+                    local safe = CFrame.new(myRoot.Position + Vector3.new(0, SKY_HEIGHT, 0))
+                    local deadline = tick() + SKY_HOLD
+                    while S.running and tick() < deadline do
+                        local r = getRoot()
+                        if not r then break end
+                        pcall(function() r.CFrame = safe end)
+                        task.wait(0.06)
+                    end
+                end
+            end
+        end)
 
         S.stompInProgress = false
-        return landed
+        if not ok then S.killAllStatus = "stomp err: " .. tostring(err) end
     end
 
     -- ─── Auto kill loop ───────────────────────────────────────────────────────
@@ -714,7 +720,7 @@ local function boot()
                             -- retry stomp while down (first attempt can miss)
                             if S.autoStomp and not S.stompInProgress and now - lastStompAt >= 0.6 then
                                 lastStompAt = now
-                                task.spawn(function() doStomp(p) end)
+                                task.spawn(function() doStomp(p, true) end) -- retreat to sky after
                             end
                         elseif alive then
                             if now - lastTgtKillAt >= 0.35 then
@@ -734,7 +740,7 @@ local function boot()
                             if koed then
                                 lastStompAt = now
                                 local victim = p
-                                task.spawn(function() doStomp(victim) end)
+                                task.spawn(function() doStomp(victim, false) end) -- no retreat: all dead
                                 break
                             end
                         end
