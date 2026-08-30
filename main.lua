@@ -18,6 +18,8 @@ local function boot()
         lastKillAllAt    = 0,
         autoKillTarget   = false,   -- single auto mode: kill + stomp the selected target
         stompInProgress  = false,
+        dumpOnClick      = false,   -- toggle: left-click empties the whole mag at the crosshair
+        dumpInProgress   = false,
         killTargetUserId = nil,
         killTargetName   = "none",
         killTargetInput  = "",
@@ -48,6 +50,7 @@ local function boot()
     local handles           = {}
     local finderButtons     = {}
     local autoKillToggle    = nil
+    local dumpToggle        = nil
 
     -- ─── Notify ──────────────────────────────────────────────────────────────
     local function notify(title, text, kind)
@@ -735,6 +738,89 @@ local function boot()
         return text == wanted or string.sub(text, -#wanted) == wanted
     end
 
+    -- ─── Ammo dump (fire whole mag at crosshair on click) ──────────────────────
+    -- World point + part the crosshair is over. Tries the executor mouse first,
+    -- falls back to a viewport ray + raycast (Matcha may not bind :GetMouse()).
+    local function getAimHit()
+        local cam = workspace.CurrentCamera
+        if not cam then return nil end
+        local pos, part
+        pcall(function()
+            local m = lp:GetMouse()
+            if m and m.Hit then pos = m.Hit.Position; part = m.Target end
+        end)
+        if pos then return pos, part end
+        pcall(function()
+            local loc = UIS:GetMouseLocation()
+            local ray = cam:ViewportPointToRay(loc.X, loc.Y)
+            local params = RaycastParams.new()
+            pcall(function() params.FilterType = Enum.RaycastFilterType.Exclude end)
+            pcall(function() params.FilterDescendantsInstances = { lp.Character } end)
+            local res = workspace:Raycast(ray.Origin, ray.Direction * 5000, params)
+            if res then pos = res.Position; part = res.Instance
+            else pos = ray.Origin + ray.Direction * 1000 end
+        end)
+        return pos, part
+    end
+
+    local function buildAimPellets(pos, part)
+        local pellets = {}
+        for _ = 1, PELLETS_PER_TARGET do
+            local jitter = pos + Vector3.new(
+                (math.random() - 0.5) * 0.5,
+                (math.random() - 0.5) * 0.5,
+                (math.random() - 0.5) * 0.5)
+            pellets[#pellets + 1] = {
+                AimPosition = jitter,
+                Result1 = jitter,
+                Result2 = part or pos,
+                Result3 = Vector3.yAxis,
+            }
+        end
+        return pellets
+    end
+
+    -- Empty the whole magazine at the crosshair in one instant burst. Capped so
+    -- a single click can't fire an absurd number of shots (anticheat kick).
+    local DUMP_MAX_SHOTS = 12
+    local function dumpAtAim()
+        if S.dumpInProgress then return end
+        S.dumpInProgress = true
+        pcall(function()
+            local remote = resolveRemotes()
+            local backpack, character = getGunContainers()
+            if not remote or not character then return end
+            local tool, wasEquipped = getBestGun(character, backpack)
+            if not tool then requestLoadout(); S.killAllStatus = "dump: no gun"; return end
+            if not wasEquipped then equipKillTool(tool, character, getHumanoid()) end
+            local handle = tool:FindFirstChild("Handle")
+            if not handle then S.killAllStatus = "dump: no handle"; return end
+            local rangeObj = tool:FindFirstChild("Range")
+            local dmgObj   = tool:FindFirstChild("Damage")
+            local ammoObj  = tool:FindFirstChild("Ammo")
+            local range  = rangeObj and (tonumber(rangeObj.Value) or 200) or 200
+            local damage = dmgObj and (tonumber(dmgObj.Value) or 50) or 50
+            local shots  = math.floor(tonumber(ammoObj and ammoObj.Value) or SHOT_BURST)
+            shots = math.max(1, math.min(DUMP_MAX_SHOTS, shots))
+            local fired = 0
+            for _ = 1, shots do
+                if not S.running then break end
+                handle = tool:FindFirstChild("Handle")
+                if not handle then break end
+                local pos, part = getAimHit()
+                if not pos then break end
+                local ok = pcall(function()
+                    remote:FireServer("ShootGun", handle, handle.Position, buildAimPellets(pos, part), nil, nil, nil, range, damage)
+                end)
+                if ok then fired = fired + 1 end
+                task.wait(SHOT_DELAY)
+            end
+            clearGunState(tool)
+            S.killAllStatus = "dumped " .. tostring(fired) .. " shots"
+        end)
+        S.dumpInProgress = false
+    end
+
     pcall(function()
         -- No gameProcessedEvent gate: in Matcha `gp` is often truthy for every
         -- key, which silently swallowed every hotkey.
@@ -743,6 +829,14 @@ local function boot()
             local focused = false
             pcall(function() focused = UIS:GetFocusedTextBox() ~= nil end)
             if focused then return end
+            -- Dump full mag on left click. Only while the menu isn't holding the
+            -- cursor, so clicking UI buttons doesn't fire your gun.
+            local isM1 = false
+            pcall(function() isM1 = input.UserInputType == Enum.UserInputType.MouseButton1 end)
+            if isM1 then
+                if S.dumpOnClick and not gameInputCaptured then task.spawn(dumpAtAim) end
+                return
+            end
             if keyMatches(input, "K", 107) then
                 task.spawn(killAll)          -- K = instant kill all
             elseif keyMatches(input, "L", 108) then
@@ -893,6 +987,10 @@ local function boot()
             S.autoKillTarget = on and true or false
             S.killAllStatus = S.autoKillTarget and "auto on" or "auto off"
         end)
+        dumpToggle = killControls:Toggle("Dump full mag on click", S.dumpOnClick, function(on)
+            S.dumpOnClick = on and true or false
+            S.killAllStatus = S.dumpOnClick and "dump on" or "dump off"
+        end)
 
         -- FIRE
         killControls:Divider("Fire")
@@ -921,6 +1019,7 @@ local function boot()
             return "HP:       " .. math.floor(tonumber(hum.Health) or 0) .. "/" .. math.floor(tonumber(hum.MaxHealth) or 100)
         end)
         killStatus:Label(function() return "Auto:     " .. (S.autoKillTarget and "on" or "off") end)
+        killStatus:Label(function() return "Dump:     " .. (S.dumpOnClick and "on (click)" or "off") end)
         killStatus:Info("K = kill all  |  L = kill selected  |  scroll = cycle targets  |  P = menu")
 
         notify("BetterVoid", "loaded — K=kill all  L=kill selected", "success")
