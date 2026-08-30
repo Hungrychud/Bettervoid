@@ -740,33 +740,48 @@ local function boot()
     end
 
     -- ─── Click-to-kill (aim at a player, click, head-snap burst) ───────────────
-    -- Same head-snap kill as "kill selected", but the target is whoever is under
-    -- your crosshair when you click. Matcha lacks GetMouseLocation / mouse.Hit
-    -- AND GetPlayerFromCharacter, so we raycast forward from the camera (that IS
-    -- the crosshair) and resolve the player by walking the hit part's ancestors
-    -- and matching against the player list (by identity or character name).
+    -- Same head-snap kill as "kill selected", but the target is whichever player
+    -- is nearest your mouse cursor when you click (forgiving = consistent — a
+    -- pixel-perfect ray missed constantly). Matcha can't project world→screen
+    -- (WorldToViewportPoint / ViewportPointToRay all fail) and has no mouse.Hit,
+    -- so we project each head to the screen by hand from the camera CFrame + FOV
+    -- + viewport and pick the closest to GetMouse().X/Y within a pixel radius.
+    local AIM_MAX_PX = 150
     local function getAimPlayer()
         local cam = workspace.CurrentCamera
         if not cam then return nil end
-        local res
-        pcall(function()
-            local params = RaycastParams.new()
-            pcall(function() params.FilterType = Enum.RaycastFilterType.Exclude end)
-            pcall(function() params.FilterDescendantsInstances = { lp.Character } end)
-            res = workspace:Raycast(cam.CFrame.Position, cam.CFrame.LookVector * 5000, params)
+        local mx, my, vp, fov
+        local okm = pcall(function()
+            local m = lp:GetMouse()
+            mx, my = m.X, m.Y
+            vp  = cam.ViewportSize
+            fov = cam.FieldOfView
         end)
-        if not res or not res.Instance then return nil end
-        local inst = res.Instance
-        for _ = 1, 8 do
-            if not inst then break end
-            for _, pl in ipairs(Players:GetPlayers()) do
-                if not samePlayer(pl, lp) then
-                    if pl.Character == inst or inst.Name == pl.Name then return pl end
+        if not okm or not vp or vp.X == 0 or not mx then return nil end
+        local aspect  = vp.X / vp.Y
+        local tanHalf = math.tan(math.rad(fov) / 2)
+        local best, bestPlayer
+        for _, q in ipairs(Players:GetPlayers()) do
+            if not samePlayer(q, lp) and not isFriendly(q) then
+                local char = q.Character
+                local head = char and (char:FindFirstChild("Head") or char:FindFirstChild("HumanoidRootPart"))
+                if head then
+                    pcall(function()
+                        local cs = cam.CFrame:PointToObjectSpace(head.Position)
+                        local depth = -cs.Z
+                        if depth > 0 then
+                            local sx = ((cs.X / depth) / (tanHalf * aspect) * 0.5 + 0.5) * vp.X
+                            local sy = (1 - ((cs.Y / depth) / tanHalf * 0.5 + 0.5)) * vp.Y
+                            local d = math.sqrt((sx - mx) ^ 2 + (sy - my) ^ 2)
+                            if d <= AIM_MAX_PX and (not best or d < best) then
+                                best = d; bestPlayer = q
+                            end
+                        end
+                    end)
                 end
             end
-            inst = inst.Parent
         end
-        return nil
+        return bestPlayer
     end
 
     -- On click: kill the player under the crosshair with the full head-snap burst
