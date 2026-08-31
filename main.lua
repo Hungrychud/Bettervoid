@@ -530,18 +530,118 @@ local function boot()
         return out
     end
 
+    -- Real, server-side gun equip. The server only accepts ShootGun from a gun it
+    -- sees EQUIPPED. Matcha has no humanoid:EquipTool, and a client tool.Parent =
+    -- character is LOCAL-ONLY — it never reaches the server, so shots do nothing
+    -- when you aren't actually holding a gun (proven live: equipped client-side,
+    -- fired, zero damage). The one thing that DOES replicate is a real hardware
+    -- keystroke via keypress(): tapping a hotbar slot (1/2/3) makes the engine
+    -- equip the gun for real, server and all (proven live: keypress a slot, fire,
+    -- target 40 -> 4 HP + KO). So when you're bare we tap a hotbar slot to equip a
+    -- gun for you, then fire normally. Now every kill works even when you're not
+    -- holding your gun. We cache the slot that worked so later equips are instant.
+    local HOTBAR_SLOTS = { 0x31, 0x32, 0x33 } -- keys 1, 2, 3 = the three guns
+    local function realEquipGun()
+        local _, character = getGunContainers()
+        if not character then return nil end
+        local existing = getEquippedGun(character)
+        if existing then return existing end
+        if type(keypress) ~= "function" then return nil end
+        -- ROTATE which gun we grab each time so we use EVERY weapon (1 -> 2 -> 3 ->
+        -- 1 ...), not just slot 1's Double-Barrel. Spreads the shooting across all
+        -- three guns so no single one runs out of ammo. Order starts at the next
+        -- slot in the rotation and wraps, so if one slot is empty/fails we still
+        -- fall through to another.
+        S._equipRotate = (S._equipRotate or 0) % #HOTBAR_SLOTS + 1
+        local order = {}
+        for i = 0, #HOTBAR_SLOTS - 1 do
+            order[#order + 1] = HOTBAR_SLOTS[((S._equipRotate - 1 + i) % #HOTBAR_SLOTS) + 1]
+        end
+        -- keypress occasionally misses, so retry the whole sweep a few times until
+        -- a gun is actually in hand. Returning nil (never equipped) is important:
+        -- the caller must NOT fall through to firing, or it "fires" with no gun
+        -- server-side and deals zero damage (that was the intermittent no-damage).
+        for _ = 1, 3 do
+            for _, code in ipairs(order) do
+                pcall(function() keypress(code) end)
+                task.wait(0.07)
+                pcall(function() keyrelease(code) end)
+                task.wait(0.07)
+                local g = getEquippedGun(character)
+                if g then S._equipSlot = code; return g end
+            end
+        end
+        return nil
+    end
+
+    -- Tap a hotbar slot again to holster the gun we auto-equipped (verified:
+    -- pressing the equipped slot toggles it back off, server-side). Delayed so the
+    -- shot (and the full-burst retry pass ~0.35s later) lands first, then we go
+    -- bare again — quick equip → shoot → unequip.
+    local function quickUnequip(slot, light)
+        if type(keypress) ~= "function" or not slot then return end
+        task.spawn(function()
+            task.wait(light and 0.1 or 0.45) -- let the burst (+ retry) land first
+            -- keypress occasionally misses, so re-tap the slot until we're actually
+            -- bare (each successful tap toggles the equipped gun back off).
+            for _ = 1, 4 do
+                local _, character = getGunContainers()
+                if not (character and getEquippedGun(character)) then break end
+                pcall(function() keypress(slot) end)
+                task.wait(0.06)
+                pcall(function() keyrelease(slot) end)
+                task.wait(0.08)
+            end
+        end)
+    end
+
+    -- Route every kill through here. If you're holding a gun, fire immediately; if
+    -- you're bare, tap a hotbar slot to real-equip, fire, then tap it again to
+    -- holster — so you flash the gun out, shoot, and go bare again fast. Makes
+    -- retaliate / auto / click / kill-all all work whether or not you're holding
+    -- your gun. light = single ammo-cheap burst (auto/retaliate); nil = full burst.
+    -- keepArmed = stay equipped after firing (auto loop, which fires continuously).
+    local function smartKill(victims, label, light, keepArmed)
+        local _, character = getGunContainers()
+        local selfEquipped = false
+        if not (character and getEquippedGun(character)) then
+            if S.killInProgress and (tick() - (S.killInProgressAt or 0)) < 3 then
+                S.killAllStatus = "already firing"; return false
+            end
+            S.killInProgress = true; S.killInProgressAt = tick()
+            local g = nil
+            pcall(function() g = realEquipGun() end)  -- keypress the hotbar to equip for real
+            selfEquipped = g ~= nil
+            S.killInProgress = false
+            -- Couldn't get a gun in hand → abort. Firing now would hit the useless
+            -- local-only equip fallback and deal no damage; better to no-op than to
+            -- report a fake "fired". (Usually means the Roblox window isn't focused,
+            -- since keypress needs real OS input.)
+            if not selfEquipped then
+                S.killAllStatus = (label and (label .. ": ") or "") .. "equip failed (focus window)"
+                return false
+            end
+        end
+        local res = killPlayers(victims, label, false, light)
+        -- Holster again only if WE equipped it (never yank a gun you chose to hold)
+        -- and the caller isn't asking to stay armed for continuous fire.
+        if selfEquipped and not keepArmed then quickUnequip(S._equipSlot, light) end
+        return res
+    end
+
     local function killAll()
-        return killPlayers(capTargets(getKillCandidates()), "all")
+        return smartKill(capTargets(getKillCandidates()), "all")
     end
 
     local function killSelected()
         local p = getSelectedPlayer()
         if not p then S.killAllStatus = "target missing"; return false end
-        return killPlayers({ p }, p.Name)
+        return smartKill({ p }, p.Name)
     end
 
     -- Expose for keybinds / external calls / debugging.
     S.killAll      = killAll
+    S.smartKill    = smartKill
     S.killSelected = killSelected
 
     -- ─── Stomp ──────────────────────────────────────────────────────────────
@@ -564,15 +664,18 @@ local function boot()
         S.stompInProgress = true
         local ok, err = pcall(function()
             local remote = resolveRemotes()
+            -- Note: RunService.Heartbeat:Wait() is unsupported in Matcha (errors),
+            -- so the glue loop paces with task.wait instead.
 
             -- STICK-TO-TARGET stomp: macroing targets slide fast. A loose loop
             -- (re-snap every 0.05s) lets them slip between snaps, so the server
             -- sees us off them and the stomp raycast misses. Instead we GLUE onto
-            -- their CURRENT root EVERY Heartbeat frame (as tight as the client can
-            -- move) while firing Stomp on a throttle. Always exactly on them when
-            -- the server processes the stomp, no matter how fast they move. Ends
-            -- the moment KO clears (stomp landed / dead) or STOMP_STICK_TIME cap.
-            local Run = game:GetService("RunService")
+            -- their CURRENT root every ~0.03s (as tight as the client can move)
+            -- while firing Stomp on a throttle. Always exactly on them when the
+            -- server processes the stomp, no matter how fast they move. Ends the
+            -- moment KO clears (stomp landed / dead) or STOMP_STICK_TIME cap.
+            -- (RunService.Heartbeat:Wait() is unsupported in Matcha, so we pace
+            -- the glue with task.wait — a tight loop with no yield would freeze.)
             local stickDeadline = tick() + STOMP_STICK_TIME
             local lastFire = 0
             while S.running and tick() < stickDeadline do
@@ -595,7 +698,7 @@ local function boot()
                     pcall(function() remote:FireServer("Stomp") end)
                 end
 
-                pcall(function() Run.Heartbeat:Wait() end)
+                task.wait(0.03)
             end
 
             if retreat then
@@ -679,11 +782,10 @@ local function boot()
                     stompedChar = nil -- back up again: allow a fresh stomp next KO
                     if now - lastTgtKillAt >= 0.35 then
                         lastTgtKillAt = now
-                        -- Single burst (1 shot, 10 head pellets = still one-shots),
-                        -- no retry. Full 3-burst + retry drained the mag every cycle,
-                        -- which forced slow loadout/reload swaps (felt slow + emptied
-                        -- ammo). One shot per cycle is fast AND ammo-cheap.
-                        killPlayers({ p }, "auto", false, true)
+                        -- smartKill: fast single burst; auto-equips if bare. keepArmed
+                        -- so we DON'T holster between the 0.35s cycles (auto fires
+                        -- continuously — flicker-equipping every cycle would be slow).
+                        smartKill({ p }, "auto", true, true)
                     end
                 end
             end)
@@ -761,7 +863,7 @@ local function boot()
                                     lastKillAt[uid] = now
                                     local victim = p
                                     S.killAllStatus = "retaliate: " .. p.Name
-                                    task.spawn(function() killPlayers({ victim }, "retaliate", false, true) end)
+                                    task.spawn(function() smartKill({ victim }, "retaliate", true) end)
                                 end
                             end
 
@@ -779,7 +881,7 @@ local function boot()
                         lastKillAt[uid] = now
                         local victim = dmgSuspect
                         S.killAllStatus = "retaliate(dmg): " .. dmgSuspect.Name
-                        task.spawn(function() killPlayers({ victim }, "retaliate", false, true) end)
+                        task.spawn(function() smartKill({ victim }, "retaliate", true) end)
                     end
                 end
             end)
@@ -944,7 +1046,7 @@ local function boot()
             local p = getAimPlayer()
             if not p then S.killAllStatus = "aim: no player"; return end
             if isFriendly(p) then S.killAllStatus = "aim: friendly"; return end
-            killPlayers({ p }, p.Name)
+            smartKill({ p }, p.Name)
         end)
         S.dumpInProgress = false
     end
