@@ -21,6 +21,7 @@ local function boot()
         tpToSpawn        = false,   -- follow the target to their respawn point instead of retreating
         dumpOnClick      = false,   -- toggle: left-click empties the whole mag at the crosshair
         dumpInProgress   = false,
+        retaliate        = false,   -- toggle: instant-kill anyone who shoots at you
         killTargetUserId = nil,
         killTargetName   = "none",
         killTargetInput  = "",
@@ -40,9 +41,14 @@ local function boot()
     local SHOT_DELAY         = 0.065
     local EQUIP_DELAY        = 0.06
     -- Stomp / retreat tuning
-    local STOMP_MAX_ATTEMPTS = 1      -- single precise stomp on the target, then done
+    local STOMP_MAX_ATTEMPTS = 1      -- (legacy) single precise stomp on the target
+    local STOMP_STICK_TIME   = 1.2    -- max seconds to stick + re-fire stomp on a KO'd target
+    local STOMP_STICK_STEP   = 0.05   -- re-snap onto target + re-stomp every 0.05s (tracks fast/macro movement)
     local SKY_HEIGHT         = 1500   -- studs straight up = out of every gun's range
     local SKY_HOLD           = 0.7    -- seconds pinned in the sky (nobody can shoot you)
+    -- Auto-retaliate tuning
+    local RETALIATE_RADIUS   = 22     -- studs: enemy's aim (MousePos) this close to my body = "shooting at me"
+    local RETALIATE_CD       = 0.5    -- per-attacker cooldown so one shooter isn't re-killed every frame
     local LOADOUT            = { "[Double-Barrel SG]", "[Revolver]", "[TacticalShotgun]", "None" }
     local GUN_NAMES          = { ["[Double-Barrel SG]"] = true, ["[Revolver]"] = true, ["[TacticalShotgun]"] = true }
 
@@ -559,26 +565,37 @@ local function boot()
         local ok, err = pcall(function()
             local remote = resolveRemotes()
 
-            for _ = 1, STOMP_MAX_ATTEMPTS do
-                if not S.running then break end
+            -- STICK-TO-TARGET stomp: macroing targets slide fast. A loose loop
+            -- (re-snap every 0.05s) lets them slip between snaps, so the server
+            -- sees us off them and the stomp raycast misses. Instead we GLUE onto
+            -- their CURRENT root EVERY Heartbeat frame (as tight as the client can
+            -- move) while firing Stomp on a throttle. Always exactly on them when
+            -- the server processes the stomp, no matter how fast they move. Ends
+            -- the moment KO clears (stomp landed / dead) or STOMP_STICK_TIME cap.
+            local Run = game:GetService("RunService")
+            local stickDeadline = tick() + STOMP_STICK_TIME
+            local lastFire = 0
+            while S.running and tick() < stickDeadline do
                 local char       = targetPlayer.Character
                 local targetRoot = char and char:FindFirstChild("HumanoidRootPart")
                 local myRoot     = getRoot()
                 if not targetRoot or not myRoot then break end
                 if not koState(char) then break end -- done (dead / respawned / up)
 
-                -- Land exactly on the target (same XZ, just above their root) so
-                -- the server's downward stomp raycast lands precisely on them.
+                -- Glue onto the target's live position (same XZ, just above their
+                -- root) so we track their movement frame-perfect.
                 local tp = targetRoot.Position
                 pcall(function()
                     myRoot.CFrame = CFrame.new(tp.X, tp.Y + 2, tp.Z)
                 end)
-                task.wait(0.18) -- give the server time to receive the new position
+                -- Throttle the actual Stomp fire so we don't spam the remote, but
+                -- keep the position glued every frame in between.
+                if remote and tick() - lastFire >= STOMP_STICK_STEP then
+                    lastFire = tick()
+                    pcall(function() remote:FireServer("Stomp") end)
+                end
 
-                if remote then pcall(function() remote:FireServer("Stomp") end) end
-
-                task.wait(0.15) -- brief settle so the stomp registers before retreat
-                if not koState(targetPlayer.Character) then break end
+                pcall(function() Run.Heartbeat:Wait() end)
             end
 
             if retreat then
@@ -672,6 +689,102 @@ local function boot()
             end)
             if not ok then S.killAllStatus = "loop err: " .. tostring(err) end
             task.wait(0.1)
+        end
+    end)
+
+    -- ─── Auto retaliate: instant-kill anyone who shoots at you ─────────────────
+    -- Each character exposes BodyEffects.GunFiring (true while firing) and
+    -- BodyEffects.MousePos (the world point they're aiming at). An enemy is
+    -- "shooting AT me" when they fire AND their aim lands on my body. We detect
+    -- the fire on the rising edge (per-attacker) so we don't re-trigger every
+    -- frame they hold it, plus a health-drop fallback that kills whoever is
+    -- aiming closest to me the instant I actually take damage. Independent of
+    -- the auto/selected target — never touches your selection. Whole body pcall'd
+    -- so it can't freeze. Uses the light single-burst kill (ammo-cheap one-shot).
+    task.spawn(function()
+        local lastHealth = nil
+        local prevFiring = {}   -- [userId] = GunFiring last frame (rising-edge detect)
+        local prevShots  = {}   -- [userId] = GunShotChanges last frame (backup fire signal)
+        local lastKillAt = {}   -- [userId] = tick of last retaliate kill (per-attacker CD)
+        while S.running do
+            local ok, err = pcall(function()
+                if not S.retaliate then lastHealth = nil; return end
+                local char = lp.Character
+                local hum  = char and char:FindFirstChildOfClass("Humanoid")
+                if not hum then lastHealth = nil; return end
+
+                -- My body reference points (aim landing near any = a hit on me).
+                local myParts = {}
+                for _, n in ipairs({ "Head", "HumanoidRootPart", "UpperTorso", "LowerTorso" }) do
+                    local part = char:FindFirstChild(n)
+                    if part then myParts[#myParts + 1] = part.Position end
+                end
+                if #myParts == 0 then return end
+
+                local hp = tonumber(hum.Health) or 0
+                local tookDamage = (lastHealth ~= nil and hp < lastHealth - 0.5 and hp > 0)
+                lastHealth = hp
+
+                local now = tick()
+                local dmgSuspect, dmgBest = nil, math.huge
+
+                for _, p in ipairs(Players:GetPlayers()) do
+                    if not samePlayer(p, lp) and not isFriendly(p) then
+                        local c  = p.Character
+                        local be = c and c:FindFirstChild("BodyEffects")
+                        if be then
+                            local mp  = be:FindFirstChild("MousePos")
+                            local gf  = be:FindFirstChild("GunFiring")
+                            local gsc = be:FindFirstChild("GunShotChanges")
+
+                            -- Closest distance from their aim point to my body.
+                            local aimDist = math.huge
+                            if mp then
+                                local ap = mp.Value
+                                for _, pos in ipairs(myParts) do
+                                    local d = (ap - pos).Magnitude
+                                    if d < aimDist then aimDist = d end
+                                end
+                            end
+
+                            local uid    = tonumber(p.UserId)
+                            local firing = gf and gf.Value == true
+                            local shots  = gsc and (tonumber(gsc.Value) or 0) or 0
+                            local firedEdge = (firing and not prevFiring[uid])
+                                           or (prevShots[uid] ~= nil and shots > prevShots[uid])
+                            prevFiring[uid] = firing
+                            prevShots[uid]  = shots
+
+                            -- Proactive: they just fired AND aimed at me → kill.
+                            if firedEdge and aimDist <= RETALIATE_RADIUS then
+                                if now - (lastKillAt[uid] or 0) >= RETALIATE_CD then
+                                    lastKillAt[uid] = now
+                                    local victim = p
+                                    S.killAllStatus = "retaliate: " .. p.Name
+                                    task.spawn(function() killPlayers({ victim }, "retaliate", false, true) end)
+                                end
+                            end
+
+                            -- Remember the closest aimer for the damage fallback.
+                            if aimDist < dmgBest then dmgBest = aimDist; dmgSuspect = p end
+                        end
+                    end
+                end
+
+                -- Fallback: I lost HP this frame but no rising edge caught it (fast
+                -- shot between polls) → kill whoever is aiming closest to me.
+                if tookDamage and dmgSuspect and dmgBest <= RETALIATE_RADIUS * 2 then
+                    local uid = tonumber(dmgSuspect.UserId)
+                    if now - (lastKillAt[uid] or 0) >= RETALIATE_CD then
+                        lastKillAt[uid] = now
+                        local victim = dmgSuspect
+                        S.killAllStatus = "retaliate(dmg): " .. dmgSuspect.Name
+                        task.spawn(function() killPlayers({ victim }, "retaliate", false, true) end)
+                    end
+                end
+            end)
+            if not ok then S.killAllStatus = "retaliate err: " .. tostring(err) end
+            task.wait(0.05)
         end
     end)
 
@@ -1022,6 +1135,10 @@ local function boot()
             S.dumpOnClick = on and true or false
             S.killAllStatus = S.dumpOnClick and "click-kill on" or "click-kill off"
         end)
+        killControls:Toggle("Auto retaliate (kill attackers)", S.retaliate, function(on)
+            S.retaliate = on and true or false
+            S.killAllStatus = S.retaliate and "retaliate on" or "retaliate off"
+        end)
 
         -- FIRE
         killControls:Divider("Fire")
@@ -1051,6 +1168,7 @@ local function boot()
         end)
         killStatus:Label(function() return "Auto:     " .. (S.autoKillTarget and "on" or "off") end)
         killStatus:Label(function() return "ClickKill:" .. (S.dumpOnClick and " on" or " off") end)
+        killStatus:Label(function() return "Retaliate:" .. (S.retaliate and " on" or " off") end)
         killStatus:Info("K = kill all  |  L = kill selected  |  scroll = cycle targets  |  P = menu")
 
         notify("BetterVoid", "loaded — K=kill all  L=kill selected", "success")
