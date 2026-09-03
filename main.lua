@@ -938,6 +938,56 @@ local function boot()
     -- every ENEMY gun's server-side range — and still instakill the whole lobby from
     -- above. We chunk-kill S.rampageWave targets per FireServer packet (the proven
     -- no-kick cap) on the killAllCooldown, with timing jitter to blur the cadence.
+    -- Stomp sweep: TP-hop across EVERY currently-KO'd enemy and Stomp each until it
+    -- clears (dies / gets up). This is the "stomp everyone KO'd" pass — you can only
+    -- be on one body at a time, so it's serial but fast (~each body a few Stomp
+    -- fires). Own in-progress guard so passes never overlap; independent of the
+    -- single-target doStomp's stompInProgress lock.
+    local rampStompActive = false
+    local function rampageStompSweep()
+        if rampStompActive then return end
+        rampStompActive = true
+        pcall(function()
+            local remote = resolveRemotes()
+            if not remote then return end
+            -- Snapshot all KO'd enemies, nearest-first, then work the whole list.
+            local myRoot = getRoot()
+            local kod = {}
+            for _, p in ipairs(getKillCandidates()) do
+                local c = p.Character
+                local r = c and c:FindFirstChild("HumanoidRootPart")
+                if c and r and koState(c) then kod[#kod + 1] = p end
+            end
+            if myRoot then
+                table.sort(kod, function(a, b)
+                    local ra = a.Character and a.Character:FindFirstChild("HumanoidRootPart")
+                    local rb = b.Character and b.Character:FindFirstChild("HumanoidRootPart")
+                    if not ra then return false end
+                    if not rb then return true end
+                    return (ra.Position - myRoot.Position).Magnitude < (rb.Position - myRoot.Position).Magnitude
+                end)
+            end
+            for _, p in ipairs(kod) do
+                -- Stick onto this body and Stomp until KO clears or a short cap, then
+                -- move to the next KO'd body. Cap keeps one tough body from stalling
+                -- the whole sweep.
+                local deadline = tick() + 0.4
+                while S.running and S.rampage and tick() < deadline do
+                    local c = p.Character
+                    local r = c and c:FindFirstChild("HumanoidRootPart")
+                    if not r or not koState(c) then break end   -- done: dead / up
+                    local mr = getRoot()
+                    if mr then
+                        pcall(function() mr.CFrame = CFrame.new(r.Position.X, r.Position.Y + 2, r.Position.Z) end)
+                    end
+                    pcall(function() remote:FireServer("Stomp") end)
+                    task.wait(0.06)
+                end
+            end
+        end)
+        rampStompActive = false
+    end
+
     task.spawn(function()
         while S.running do
             local ok, err = pcall(function()
@@ -945,41 +995,42 @@ local function boot()
                 local root = getRoot()
                 if not root then return end
 
-                -- Sky perch: re-assert altitude each cycle. Pure ranged wipe (can't
-                -- stomp from up here). Their guns are range-limited server-side; ours
-                -- isn't, so we stay untouchable while still lethal.
-                if S.rampageSky then
+                -- Sky perch: re-assert altitude each cycle. Their guns are range-
+                -- limited server-side; ours isn't, so we stay untouchable while still
+                -- lethal. Skip while a stomp sweep is running so we don't yank
+                -- ourselves off the bodies mid-stomp (sweep drops us to ground).
+                if S.rampageSky and not rampStompActive then
                     pcall(function()
                         root.CFrame = CFrame.new(root.Position.X, S.rampageHeight, root.Position.Z)
                     end)
                 end
 
                 -- Gather living enemies (getKillCandidates already sorts nearest-first).
+                -- getKillTarget's valid flag is false for KO'd bodies, so the kill wave
+                -- never re-shoots someone who's already down — they STAY KO'd until the
+                -- stomp sweep finishes them (no kill-vs-stomp race).
                 local living = {}
                 for _, p in ipairs(getKillCandidates()) do
                     local _, valid = getKillTarget(p)
                     if valid then living[#living + 1] = p end
                 end
-                if #living == 0 then S.killAllStatus = "rampage: clear"; return end
 
                 -- One chunk this tick (rampageWave cap). The loop deletes the rest
                 -- over the next few ticks, all under the mass-damage kick threshold.
-                local cap  = math.max(1, math.min(#living, tonumber(S.rampageWave) or 6))
-                local wave = {}
-                for i = 1, cap do wave[i] = living[i] end
-                smartKill(wave, "rampage", true, true)  -- light burst, stay armed
-                S.killAllStatus = "rampage: " .. #living .. " up"
-
-                -- Ground mode: stomp one KO'd body per cycle (farms SavedStomps).
-                if S.rampageStomp and not S.rampageSky and not S.stompInProgress then
-                    for _, p in ipairs(wave) do
-                        local c = p.Character
-                        if c and koState(c) then
-                            task.spawn(function() doStomp(p, false) end)
-                            break
-                        end
-                    end
+                if #living > 0 then
+                    local cap  = math.max(1, math.min(#living, tonumber(S.rampageWave) or 6))
+                    local wave = {}
+                    for i = 1, cap do wave[i] = living[i] end
+                    smartKill(wave, "rampage", true, true)  -- light burst, stay armed
                 end
+
+                -- Stomp EVERYONE currently KO'd (full sweep in its own task so the
+                -- kill cadence keeps running while we hop bodies).
+                if S.rampageStomp and not rampStompActive then
+                    task.spawn(rampageStompSweep)
+                end
+
+                S.killAllStatus = "rampage: " .. #living .. " up"
             end)
             if not ok then S.killAllStatus = "rampage err: " .. tostring(err) end
             -- Jittered pacing, kept above killAllCooldown so runKillPlayers' own
@@ -1396,9 +1447,9 @@ local function boot()
         rampSec:Slider("Perch height", S.rampageHeight, 25, 100, 1500, " studs", function(v)
             S.rampageHeight = tonumber(v) or S.rampageHeight
         end)
-        rampSec:Toggle("Stomp KO'd (ground)", S.rampageStomp, function(on)
+        rampSec:Toggle("Auto-stomp KO'd", S.rampageStomp, function(on)
             S.rampageStomp = on and true or false
-        end, "Ground mode only: stomp downed bodies (farms SavedStomps)")
+        end, "Chase + stomp every downed body server-wide (farms SavedStomps). In sky mode you drop briefly to stomp.")
         rampSec:Slider("Targets / wave", S.rampageWave, 1, 2, 8, " tgt", function(v)
             S.rampageWave = tonumber(v) or S.rampageWave
         end)
