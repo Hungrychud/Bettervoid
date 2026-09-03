@@ -1450,9 +1450,10 @@ local function boot()
         rampSec:Toggle("Auto-stomp KO'd", S.rampageStomp, function(on)
             S.rampageStomp = on and true or false
         end, "Chase + stomp every downed body server-wide (farms SavedStomps). In sky mode you drop briefly to stomp.")
-        rampSec:Slider("Targets / wave", S.rampageWave, 1, 2, 8, " tgt", function(v)
+        rampSec:Slider("Targets / wave", S.rampageWave, 1, 2, 50, " tgt", function(v)
             S.rampageWave = tonumber(v) or S.rampageWave
         end)
+        rampSec:Info("Wave = enemies downed per packet. High = whole server at once = fast stomp-all, but that big damage burst is what trips the kick. 6 = safe, crank it if the server doesn't punish it.")
 
         notify("BetterVoid", "loaded — K=kill all  L=kill selected", "success")
     end
