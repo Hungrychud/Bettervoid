@@ -29,28 +29,9 @@ local function boot()
         killInProgress   = false,
         killInProgressAt = 0,
 
-        -- ── Added features ──────────────────────────────────────────────────
-        antiVoid         = false,   -- snap back up if you fall into the void
-        autoRefill       = false,   -- auto-request loadout when equipped gun runs low
-        threatPriority   = false,   -- kill-all targets whoever aims at you first
+        -- ── Kill aura ───────────────────────────────────────────────────────
         killAura         = false,   -- auto-kill every enemy inside auraRadius
         auraRadius       = 60,      -- studs
-        infAmmo          = false,   -- pin equipped gun's Ammo to MaxAmmo each frame
-        esp              = false,   -- draw box/name/health over enemies
-        espBox           = true,
-        espName          = true,
-        espHealth        = true,
-        showFovCircle    = false,   -- draw the click-kill pixel radius
-        aimMaxPx         = 150,     -- click-kill / FOV circle pixel radius
-        whitelist        = {},      -- [lowername] = true  (treated as friendly)
-        capturingBind    = nil,     -- action name currently waiting for a key press
-        binds            = {        -- action -> key name (lowercase)
-            killAll      = "k",
-            killSelected = "l",
-            killAura     = "j",
-            tpTarget     = "t",
-            toggleEsp    = "b",
-        },
     }
     _G.BV = S
 
@@ -74,11 +55,8 @@ local function boot()
     local RETALIATE_CD       = 0.5    -- per-attacker cooldown so one shooter isn't re-killed every frame
     local LOADOUT            = { "[Double-Barrel SG]", "[Revolver]", "[TacticalShotgun]", "None" }
     local GUN_NAMES          = { ["[Double-Barrel SG]"] = true, ["[Revolver]"] = true, ["[TacticalShotgun]"] = true }
-    -- Added-feature tuning
-    local VOID_Y             = -50     -- root below this Y = fell into the void, snap back
+    -- Kill-aura tuning
     local AURA_STEP          = 0.3     -- seconds between kill-aura sweeps
-    local REFILL_LOW_AMMO    = 2       -- equipped Ammo <= this triggers auto-refill
-    local CONFIG_FILE        = "BetterVoid_config.json"
 
     -- ─── UI handles ──────────────────────────────────────────────────────────
     local Lib, win
@@ -148,11 +126,6 @@ local function boot()
     end
 
     local function isFriendly(player)
-        if not player then return false end
-        -- Local whitelist (our own UI) takes priority over the external lib.
-        local nm = nil
-        pcall(function() nm = string.lower(tostring(player.Name)) end)
-        if nm and S.whitelist[nm] then return true end
         local env = (getgenv and getgenv()) or _G
         local lib = env and (env.Library or _G.Library)
         if not lib or type(lib.get_priority) ~= "function" then return false end
@@ -662,45 +635,8 @@ local function boot()
         return res
     end
 
-    -- ─── Threat priority ───────────────────────────────────────────────────
-    -- My body reference points (an enemy aiming near any of these = aiming at me).
-    local function myBodyPositions()
-        local char = lp and lp.Character
-        local out  = {}
-        if char then
-            for _, n in ipairs({ "Head", "HumanoidRootPart", "UpperTorso", "LowerTorso" }) do
-                local part = char:FindFirstChild(n)
-                if part then out[#out + 1] = part.Position end
-            end
-        end
-        return out
-    end
-
-    -- Closest distance from a player's aim point (BodyEffects.MousePos) to my body.
-    -- Smaller = more directly aiming at me = higher threat. huge = not aiming / no data.
-    local function threatDist(player)
-        local c  = player and player.Character
-        local be = c and c:FindFirstChild("BodyEffects")
-        local mp = be and be:FindFirstChild("MousePos")
-        if not mp then return math.huge end
-        local ap   = mp.Value
-        local best = math.huge
-        for _, pos in ipairs(myBodyPositions()) do
-            local d = (ap - pos).Magnitude
-            if d < best then best = d end
-        end
-        return best
-    end
-
-    local function sortByThreat(list)
-        table.sort(list, function(a, b) return threatDist(a) < threatDist(b) end)
-        return list
-    end
-
     local function killAll()
-        local cands = getKillCandidates()
-        if S.threatPriority then sortByThreat(cands) end
-        return smartKill(capTargets(cands), "all")
+        return smartKill(capTargets(getKillCandidates()), "all")
     end
 
     local function killSelected()
@@ -709,26 +645,10 @@ local function boot()
         return smartKill({ p }, p.Name)
     end
 
-    -- Snap onto the currently selected target (utility button / keybind).
-    local function tpToTarget()
-        local p    = getSelectedPlayer()
-        local char = p and p.Character
-        local hrp  = char and char:FindFirstChild("HumanoidRootPart")
-        local myRoot = getRoot()
-        if hrp and myRoot then
-            pcall(function() myRoot.CFrame = CFrame.new(hrp.Position + Vector3.new(0, 3, 0)) end)
-            S.killAllStatus = "tp -> " .. p.Name
-            return true
-        end
-        S.killAllStatus = "tp: no target"
-        return false
-    end
-
     -- Expose for keybinds / external calls / debugging.
     S.killAll      = killAll
     S.smartKill    = smartKill
     S.killSelected = killSelected
-    S.tpToTarget   = tpToTarget
 
     -- ─── Stomp ──────────────────────────────────────────────────────────────
     -- Is this character currently KO'd (down, stompable)?
@@ -976,49 +896,6 @@ local function boot()
         end
     end)
 
-    -- ─── Config save / load ────────────────────────────────────────────────────
-    -- Persist toggles + whitelist + keybinds to the executor filesystem so they
-    -- survive a rejoin. Runtime handles are never serialized.
-    local PERSIST_KEYS = {
-        "autoKillTarget", "tpToSpawn", "dumpOnClick", "retaliate", "antiVoid",
-        "autoRefill", "threatPriority", "killAura", "auraRadius", "infAmmo",
-        "esp", "espBox", "espName", "espHealth", "showFovCircle", "aimMaxPx",
-    }
-
-    local function saveConfig()
-        if type(writefile) ~= "function" then S.killAllStatus = "no fs (save)"; return false end
-        local data = {}
-        for _, k in ipairs(PERSIST_KEYS) do data[k] = S[k] end
-        data.whitelist = S.whitelist
-        data.binds     = S.binds
-        local okE, json = pcall(function() return game:GetService("HttpService"):JSONEncode(data) end)
-        if not okE then S.killAllStatus = "config encode fail"; return false end
-        local okW = pcall(function() writefile(CONFIG_FILE, json) end)
-        S.killAllStatus = okW and "config saved" or "config save fail"
-        return okW
-    end
-
-    local function loadConfig()
-        if type(isfile) ~= "function" or type(readfile) ~= "function" then return false end
-        local exists = false
-        pcall(function() exists = isfile(CONFIG_FILE) end)
-        if not exists then S.killAllStatus = "no config file"; return false end
-        local okR, json = pcall(function() return readfile(CONFIG_FILE) end)
-        if not okR then S.killAllStatus = "config read fail"; return false end
-        local okD, data = pcall(function() return game:GetService("HttpService"):JSONDecode(json) end)
-        if not okD or type(data) ~= "table" then S.killAllStatus = "config parse fail"; return false end
-        for _, k in ipairs(PERSIST_KEYS) do if data[k] ~= nil then S[k] = data[k] end end
-        if type(data.whitelist) == "table" then S.whitelist = data.whitelist end
-        if type(data.binds) == "table" then
-            for action, key in pairs(data.binds) do S.binds[action] = key end
-        end
-        S.killAllStatus = "config loaded"
-        return true
-    end
-
-    S.saveConfig = saveConfig
-    S.loadConfig = loadConfig
-
     -- ─── Kill aura ──────────────────────────────────────────────────────────────
     -- Auto-kill every living enemy within auraRadius. Uses the light single-burst
     -- kill and routes through smartKill's own cooldown + capTargets so it can't
@@ -1045,179 +922,9 @@ local function boot()
         end
     end)
 
-    -- ─── Auto refill ──────────────────────────────────────────────────────────
-    -- When the equipped gun runs low, request the loadout to top it back up.
-    -- Rate-limited so it can't spam the remote. (No-op while infAmmo pins ammo.)
-    task.spawn(function()
-        local lastRefill = 0
-        while S.running do
-            local ok, err = pcall(function()
-                if not S.autoRefill then return end
-                if tick() - lastRefill < 2 then return end
-                local _, character = getGunContainers()
-                local gun = character and getEquippedGun(character)
-                if not gun then return end
-                local ammo = gun:FindFirstChild("Ammo")
-                if ammo and (tonumber(ammo.Value) or 0) <= REFILL_LOW_AMMO then
-                    lastRefill = tick()
-                    requestAmmoRefill(gun, ammo)
-                end
-            end)
-            if not ok then S.killAllStatus = "refill err: " .. tostring(err) end
-            task.wait(0.4)
-        end
-    end)
-
-    -- ─── Visuals + per-frame defense (ESP / FOV circle / anti-void / inf-ammo) ──
-    -- Matcha exposes Drawing.new (verified: Circle/Text/Square all bind + set).
-    -- Project world->screen by hand (no WorldToViewportPoint in Matcha), same math
-    -- as getAimPlayer. Every Drawing write is pcall'd (unknown prop write errors).
-    local espObjs   = {}    -- [player] = { box, name, hp }
-    local fovCircle = nil
-    local lastSafePos = nil -- last grounded position for the anti-void snap-back
-
-    local function worldToScreen(pos)
-        local cam = workspace.CurrentCamera
-        if not cam then return nil end
-        local vp, fov
-        pcall(function() vp = cam.ViewportSize; fov = cam.FieldOfView end)
-        if not vp or vp.X == 0 then return nil end
-        local aspect  = vp.X / vp.Y
-        local tanHalf = math.tan(math.rad(fov) / 2)
-        local cs      = cam.CFrame:PointToObjectSpace(pos)
-        local depth   = -cs.Z
-        if depth <= 0 then return nil end
-        local sx = ((cs.X / depth) / (tanHalf * aspect) * 0.5 + 0.5) * vp.X
-        local sy = (1 - ((cs.Y / depth) / tanHalf * 0.5 + 0.5)) * vp.Y
-        return sx, sy, depth
-    end
-
-    local function destroyEsp(player)
-        local e = espObjs[player]
-        if not e then return end
-        for _, d in pairs(e) do pcall(function() d:Remove() end) end
-        espObjs[player] = nil
-    end
-
-    local function destroyAllVisuals()
-        for p in pairs(espObjs) do destroyEsp(p) end
-        if fovCircle then pcall(function() fovCircle:Remove() end) fovCircle = nil end
-    end
-
-    local function updateEsp()
-        if not S.esp then
-            if next(espObjs) then for p in pairs(espObjs) do destroyEsp(p) end end
-            return
-        end
-        local seen = {}
-        for _, p in ipairs(Players:GetPlayers()) do
-            if not samePlayer(p, lp) and not isFriendly(p) then
-                local char = p.Character
-                local head = char and (char:FindFirstChild("Head") or char:FindFirstChild("HumanoidRootPart"))
-                local root = char and char:FindFirstChild("HumanoidRootPart")
-                local hum  = char and char:FindFirstChildOfClass("Humanoid")
-                if head and root and hum and (tonumber(hum.Health) or 0) > 0 then
-                    local hx, hy = worldToScreen(head.Position)
-                    local rx, ry = worldToScreen(root.Position)
-                    if hx and rx then
-                        seen[p] = true
-                        local e = espObjs[p]
-                        if not e then
-                            e = {}
-                            pcall(function()
-                                e.box  = Drawing.new("Square")
-                                e.name = Drawing.new("Text")
-                                e.hp   = Drawing.new("Text")
-                            end)
-                            espObjs[p] = e
-                        end
-                        local h = math.abs(ry - hy) + 22
-                        local w = h * 0.55
-                        if e.box then pcall(function()
-                            e.box.Visible   = S.espBox
-                            e.box.Color     = Color3.fromRGB(255, 60, 60)
-                            e.box.Thickness = 1.5
-                            e.box.Filled    = false
-                            e.box.Size      = Vector2.new(w, h)
-                            e.box.Position  = Vector2.new(hx - w / 2, hy - 11)
-                        end) end
-                        if e.name then pcall(function()
-                            e.name.Visible  = S.espName
-                            e.name.Text     = p.Name
-                            e.name.Size     = 14
-                            e.name.Center   = true
-                            e.name.Outline  = true
-                            e.name.Color    = Color3.fromRGB(255, 255, 255)
-                            e.name.Position = Vector2.new(hx, hy - 30)
-                        end) end
-                        if e.hp then pcall(function()
-                            e.hp.Visible  = S.espHealth
-                            e.hp.Text     = math.floor(tonumber(hum.Health) or 0) .. " hp"
-                            e.hp.Size     = 13
-                            e.hp.Center   = true
-                            e.hp.Outline  = true
-                            e.hp.Color    = Color3.fromRGB(120, 255, 120)
-                            e.hp.Position = Vector2.new(hx, hy + h - 8)
-                        end) end
-                    end
-                end
-            end
-        end
-        for p in pairs(espObjs) do if not seen[p] then destroyEsp(p) end end
-    end
-
-    local function updateFov()
-        if not S.showFovCircle then
-            if fovCircle then pcall(function() fovCircle.Visible = false end) end
-            return
-        end
-        if not fovCircle then pcall(function() fovCircle = Drawing.new("Circle") end) end
-        if not fovCircle then return end
-        local mx, my
-        pcall(function() local m = lp:GetMouse(); mx, my = m.X, m.Y end)
-        if not mx then return end
-        pcall(function()
-            fovCircle.Visible      = true
-            fovCircle.Radius       = S.aimMaxPx
-            fovCircle.Position     = Vector2.new(mx, my)
-            fovCircle.Color        = Color3.fromRGB(80, 170, 255)
-            fovCircle.Thickness    = 1.5
-            fovCircle.Filled       = false
-            fovCircle.Transparency = 1
-        end)
-    end
-
-    local function antiVoidStep()
-        if not S.antiVoid then return end
-        local hrp = getRoot()
-        if not hrp then return end
-        local pos = hrp.Position
-        if pos.Y < VOID_Y then
-            if lastSafePos then pcall(function() hrp.CFrame = CFrame.new(lastSafePos) end) end
-        else
-            -- Record a safe spot only when roughly grounded (small vertical speed).
-            local vy = 0
-            pcall(function() vy = hrp.AssemblyLinearVelocity.Y end)
-            if math.abs(vy) < 3 then lastSafePos = pos end
-        end
-    end
-
-    local function infAmmoStep()
-        if not S.infAmmo then return end
-        local _, character = getGunContainers()
-        local gun = character and getEquippedGun(character)
-        if not gun then return end
-        pcall(function()
-            local ammo = gun:FindFirstChild("Ammo")
-            local maxA = gun:FindFirstChild("MaxAmmo")
-            if ammo and maxA and ammo.Value < maxA.Value then ammo.Value = maxA.Value end
-        end)
-    end
-
     -- ─── Input ────────────────────────────────────────────────────────────────
     local UIS         = game:GetService("UserInputService")
     local RunService  = game:GetService("RunService")
-    local visConn     = nil
     local scrollConn  = nil
     local hotkeyConn  = nil
     local moveConn    = nil
@@ -1323,6 +1030,7 @@ local function boot()
     -- (WorldToViewportPoint / ViewportPointToRay all fail) and has no mouse.Hit,
     -- so we project each head to the screen by hand from the camera CFrame + FOV
     -- + viewport and pick the closest to GetMouse().X/Y within a pixel radius.
+    local AIM_MAX_PX = 150
     local function getAimPlayer()
         local cam = workspace.CurrentCamera
         if not cam then return nil end
@@ -1349,7 +1057,7 @@ local function boot()
                             local sx = ((cs.X / depth) / (tanHalf * aspect) * 0.5 + 0.5) * vp.X
                             local sy = (1 - ((cs.Y / depth) / tanHalf * 0.5 + 0.5)) * vp.Y
                             local d = math.sqrt((sx - mx) ^ 2 + (sy - my) ^ 2)
-                            if d <= S.aimMaxPx and (not best or d < best) then
+                            if d <= AIM_MAX_PX and (not best or d < best) then
                                 best = d; bestPlayer = q
                             end
                         end
@@ -1375,35 +1083,6 @@ local function boot()
         S.dumpInProgress = false
     end
 
-    -- Reconfigurable keybinds. Each bind maps an action name to a key name; the
-    -- dispatcher matches via keyMatches (numeric fallback kept — Matcha Enum
-    -- compares can fail). "Rebind" buttons set S.capturingBind; the next key press
-    -- becomes that action's key. Persisted to config on change.
-    local ACTIONS = {
-        killAll      = function() killAll() end,
-        killSelected = function() killSelected() end,
-        killAura     = function()
-            S.killAura = not S.killAura
-            S.killAllStatus = S.killAura and "aura on" or "aura off"
-            notify("Kill aura", S.killAura and "on" or "off", "info")
-        end,
-        tpTarget     = function() tpToTarget() end,
-        toggleEsp    = function()
-            S.esp = not S.esp
-            notify("ESP", S.esp and "on" or "off", "info")
-        end,
-    }
-
-    -- Extract a lowercase key name ("k") from an InputBegan event.
-    local function keyNameOf(input)
-        local kc = nil
-        pcall(function() kc = input.KeyCode end)
-        if not kc then return nil end
-        local s    = tostring(kc)             -- "Enum.KeyCode.K"
-        local name = s:match("[^.]+$")        -- "K"
-        return name and string.lower(name) or nil
-    end
-
     pcall(function()
         -- No gameProcessedEvent gate: in Matcha `gp` is often truthy for every
         -- key, which silently swallowed every hotkey.
@@ -1412,38 +1091,12 @@ local function boot()
             local focused = false
             pcall(function() focused = UIS:GetFocusedTextBox() ~= nil end)
             if focused then return end
-
-            -- Rebind capture: first real key press becomes the pending action's bind.
-            if S.capturingBind then
-                local kn = keyNameOf(input)
-                if kn and kn ~= "unknown" then
-                    local action = S.capturingBind
-                    S.binds[action] = kn
-                    S.capturingBind = nil
-                    S.killAllStatus = "bound " .. action .. " = " .. kn
-                    notify("Keybind", action .. " = " .. string.upper(kn), "success")
-                    pcall(saveConfig)
-                end
-                return
-            end
-
-            for action, key in pairs(S.binds) do
-                if key and keyMatches(input, key, 0) then
-                    local fn = ACTIONS[action]
-                    if fn then task.spawn(fn) end
-                end
+            if keyMatches(input, "K", 107) then
+                task.spawn(killAll)          -- K = instant kill all
+            elseif keyMatches(input, "L", 108) then
+                task.spawn(killSelected)     -- L = kill selected target only
             end
         end)
-    end)
-
-    -- Per-frame visuals + defense. Heartbeat so ESP tracks smoothly; every step is
-    -- self-gated by its toggle and pcall'd inside so one error can't kill the loop.
-    visConn = RunService.Heartbeat:Connect(function()
-        if not S.running then return end
-        pcall(updateEsp)
-        pcall(updateFov)
-        pcall(antiVoidStep)
-        pcall(infAmmoStep)
     end)
 
     -- Left-click detection via iskeypressed(0x01) (VK_LBUTTON). Matcha's
@@ -1507,42 +1160,6 @@ local function boot()
         notify("People finder", shown > 0 and (shown .. " players") or "no matches", shown > 0 and "success" or "warning")
     end
 
-    -- ─── Whitelist (local friendly list) ────────────────────────────────────────
-    local whitelistButtons = {}
-    local function clearWhitelist()
-        for _, b in ipairs(whitelistButtons) do
-            pcall(function()
-                if b.Destroy then b:Destroy()
-                elseif b.Remove then b:Remove()
-                elseif b.Unload then b:Unload() end
-            end)
-        end
-        whitelistButtons = {}
-    end
-
-    local function openWhitelist()
-        if not handles.whitelistSection then return end
-        clearWhitelist()
-        local n = 0
-        for name in pairs(S.whitelist) do
-            n = n + 1
-            local nm = name
-            local ok, btn = pcall(function()
-                return handles.whitelistSection:Button("✕  " .. nm, function()
-                    S.whitelist[nm] = nil
-                    pcall(saveConfig)
-                    openWhitelist()
-                    notify("Whitelist", "removed " .. nm, "info")
-                end)
-            end)
-            if ok and btn then whitelistButtons[#whitelistButtons + 1] = btn end
-        end
-        if n == 0 then
-            local ok, btn = pcall(function() return handles.whitelistSection:Info("empty — add a name above") end)
-            if ok and btn then whitelistButtons[#whitelistButtons + 1] = btn end
-        end
-    end
-
     -- ─── UI ───────────────────────────────────────────────────────────────────
     local function loadLib()
         local ok, result = pcall(function()
@@ -1554,10 +1171,6 @@ local function boot()
     end
 
     Lib = loadLib()
-
-    -- Restore saved toggles/whitelist/binds before building the UI, so every
-    -- control below is created already reflecting the loaded state.
-    pcall(loadConfig)
 
     if not Lib or not Lib.CreateWindow then
         notify("BetterVoid", "UI failed — K=kill all  L=kill selected", "warning")
@@ -1691,106 +1304,19 @@ local function boot()
         killStatus:Label(function() return "ClickKill:" .. (S.dumpOnClick and " on" or " off") end)
         killStatus:Label(function() return "Retaliate:" .. (S.retaliate and " on" or " off") end)
         killStatus:Label(function() return "Aura:     " .. (S.killAura and "on" or "off") end)
-        killStatus:Label(function() return "ESP:      " .. (S.esp and "on" or "off") end)
         killStatus:Info("K = kill all  |  L = kill selected  |  scroll = cycle targets  |  P = menu")
 
-        -- ─── Utility tab ────────────────────────────────────────────────────────
+        -- ─── Utility tab (kill aura only) ────────────────────────────────────────
         local utilTab = win:Tab("Utility", "target")
+        local auraSec = utilTab:Section("Kill Aura", "Left", "auto-kill in radius")
 
-        local defSec  = utilTab:Section("Defense",   "Left",  "survive")
-        local tgtSec  = utilTab:Section("Targeting", "Left",  "aura + priority")
-        local cfgSec  = utilTab:Section("Config",    "Left",  "save / load")
-        local visSec  = utilTab:Section("Visuals",   "Right", "esp + fov")
-        local bindSec = utilTab:Section("Keybinds",  "Right", "rebind keys")
-        handles.whitelistSection = utilTab:Section("Whitelist", "Right", "friendly names")
-
-        -- DEFENSE
-        defSec:Toggle("Anti-void / fall save", S.antiVoid, function(on)
-            S.antiVoid = on and true or false
-        end, "Snap back up if you fall into the void")
-        defSec:Toggle("Auto refill ammo", S.autoRefill, function(on)
-            S.autoRefill = on and true or false
-        end, "Request loadout when equipped gun runs low")
-        defSec:Toggle("Infinite ammo (equipped)", S.infAmmo, function(on)
-            S.infAmmo = on and true or false
-        end, "Pin equipped gun's Ammo to MaxAmmo each frame")
-
-        -- TARGETING
-        tgtSec:Toggle("Kill aura", S.killAura, function(on)
+        auraSec:Toggle("Kill aura", S.killAura, function(on)
             S.killAura = on and true or false
             S.killAllStatus = S.killAura and "aura on" or "aura off"
         end, "Auto-kill every enemy inside the radius")
-        tgtSec:Slider("Aura radius", S.auraRadius, 5, 20, 250, " studs", function(v)
+        auraSec:Slider("Aura radius", S.auraRadius, 5, 20, 250, " studs", function(v)
             S.auraRadius = tonumber(v) or S.auraRadius
         end)
-        tgtSec:Toggle("Threat priority (kill-all)", S.threatPriority, function(on)
-            S.threatPriority = on and true or false
-        end, "Kill-all hits whoever is aiming at you first")
-        tgtSec:Button("Teleport to target", function()
-            tpToTarget()
-            notify("TP", S.killAllStatus, "info")
-        end)
-
-        -- VISUALS
-        visSec:Toggle("ESP", S.esp, function(on)
-            S.esp = on and true or false
-        end, "Draw box/name/health over enemies")
-        visSec:Toggle("ESP box", S.espBox, function(on) S.espBox = on and true or false end)
-        visSec:Toggle("ESP name", S.espName, function(on) S.espName = on and true or false end)
-        visSec:Toggle("ESP health", S.espHealth, function(on) S.espHealth = on and true or false end)
-        visSec:Toggle("FOV circle (click-kill)", S.showFovCircle, function(on)
-            S.showFovCircle = on and true or false
-        end, "Show the click-kill pixel radius at your cursor")
-        visSec:Slider("Click-kill radius", S.aimMaxPx, 5, 30, 400, " px", function(v)
-            S.aimMaxPx = tonumber(v) or S.aimMaxPx
-        end)
-
-        -- CONFIG
-        cfgSec:Button("Save config", function()
-            saveConfig()
-            notify("Config", S.killAllStatus, "info")
-        end)
-        cfgSec:Button("Load config", function()
-            loadConfig()
-            openWhitelist()
-            notify("Config", S.killAllStatus .. " (reopen menu to refresh toggles)", "info")
-        end)
-        cfgSec:Info("Saved to BetterVoid_config.json — auto-loaded on start.")
-
-        -- KEYBINDS (dynamic labels + capture-on-press rebind buttons)
-        bindSec:Label(function() return "Kill all:      " .. string.upper(S.binds.killAll or "-") end)
-        bindSec:Label(function() return "Kill selected: " .. string.upper(S.binds.killSelected or "-") end)
-        bindSec:Label(function() return "Kill aura:     " .. string.upper(S.binds.killAura or "-") end)
-        bindSec:Label(function() return "TP target:     " .. string.upper(S.binds.tpTarget or "-") end)
-        bindSec:Label(function() return "Toggle ESP:    " .. string.upper(S.binds.toggleEsp or "-") end)
-        bindSec:Label(function()
-            return S.capturingBind and ("▶ press a key for " .. S.capturingBind .. " ...") or ""
-        end)
-        local function rebindBtn(label, action)
-            bindSec:Button(label, function()
-                S.capturingBind = action
-                notify("Keybind", "press a key for " .. action, "warning")
-            end)
-        end
-        rebindBtn("Rebind kill all",      "killAll")
-        rebindBtn("Rebind kill selected", "killSelected")
-        rebindBtn("Rebind kill aura",     "killAura")
-        rebindBtn("Rebind TP target",     "tpTarget")
-        rebindBtn("Rebind toggle ESP",    "toggleEsp")
-
-        -- WHITELIST
-        handles.whitelistBox = handles.whitelistSection:Textbox("Add name", "", function(v)
-            local name = tostring(v or ""):match("^%s*(.-)%s*$")
-            if name ~= "" then
-                S.whitelist[string.lower(name)] = true
-                S.killAllStatus = "whitelisted " .. name
-                pcall(saveConfig)
-                openWhitelist()
-                notify("Whitelist", "added " .. name, "success")
-            end
-        end, "Type name, enter to add (never targeted)")
-        handles.whitelistSection:Button("Refresh list", function() openWhitelist() end)
-        openWhitelist()
 
         notify("BetterVoid", "loaded — K=kill all  L=kill selected", "success")
     end
@@ -1799,13 +1325,10 @@ local function boot()
     S.unload = function()
         S.running = false
         clearFinder()
-        clearWhitelist()
-        pcall(destroyAllVisuals)
         if scrollConn then pcall(function() scrollConn:Disconnect() end) scrollConn = nil end
         if hotkeyConn then pcall(function() hotkeyConn:Disconnect() end) hotkeyConn = nil end
         if moveConn   then pcall(function() moveConn:Disconnect()   end) moveConn   = nil end
         if dumpConn   then pcall(function() dumpConn:Disconnect()   end) dumpConn   = nil end
-        if visConn    then pcall(function() visConn:Disconnect()    end) visConn    = nil end
         if S._realSetInput then pcall(function() setrobloxinput = S._realSetInput end) pcall(S._realSetInput, true) end
         if win then
             pcall(function()
