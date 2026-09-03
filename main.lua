@@ -32,6 +32,15 @@ local function boot()
         -- ── Kill aura ───────────────────────────────────────────────────────
         killAura         = false,   -- auto-kill every enemy inside auraRadius
         auraRadius       = 60,      -- studs
+
+        -- ── RAMPAGE (whole-server wipe) ─────────────────────────────────────
+        rampage          = false,   -- continuously chunk-kill the entire server
+        rampageSky       = false,   -- perch at altitude (server range-limits THEIR
+                                    -- guns, not yours) = untouchable ranged wipe
+        rampageStomp     = true,    -- ground mode: stomp KO'd bodies (farms SavedStomps)
+        rampageWave      = 6,       -- targets per FireServer packet (your no-kick cap)
+        rampageHeight    = 300,     -- studs up for sky perch (slider: raise if safe,
+                                    -- lower if the server range-checks incoming damage)
     }
     _G.BV = S
 
@@ -922,6 +931,63 @@ local function boot()
         end
     end)
 
+    -- ─── RAMPAGE: whole-server wipe ───────────────────────────────────────────────
+    -- Range + damage + hit-part are all client-supplied and the server trusts them
+    -- verbatim (confirmed by decompiling GunHandler: the shot uses `p33.Range or
+    -- 200` with no server-side re-derivation). So we can perch at altitude — out of
+    -- every ENEMY gun's server-side range — and still instakill the whole lobby from
+    -- above. We chunk-kill S.rampageWave targets per FireServer packet (the proven
+    -- no-kick cap) on the killAllCooldown, with timing jitter to blur the cadence.
+    task.spawn(function()
+        while S.running do
+            local ok, err = pcall(function()
+                if not S.rampage then return end
+                local root = getRoot()
+                if not root then return end
+
+                -- Sky perch: re-assert altitude each cycle. Pure ranged wipe (can't
+                -- stomp from up here). Their guns are range-limited server-side; ours
+                -- isn't, so we stay untouchable while still lethal.
+                if S.rampageSky then
+                    pcall(function()
+                        root.CFrame = CFrame.new(root.Position.X, S.rampageHeight, root.Position.Z)
+                    end)
+                end
+
+                -- Gather living enemies (getKillCandidates already sorts nearest-first).
+                local living = {}
+                for _, p in ipairs(getKillCandidates()) do
+                    local _, valid = getKillTarget(p)
+                    if valid then living[#living + 1] = p end
+                end
+                if #living == 0 then S.killAllStatus = "rampage: clear"; return end
+
+                -- One chunk this tick (rampageWave cap). The loop deletes the rest
+                -- over the next few ticks, all under the mass-damage kick threshold.
+                local cap  = math.max(1, math.min(#living, tonumber(S.rampageWave) or 6))
+                local wave = {}
+                for i = 1, cap do wave[i] = living[i] end
+                smartKill(wave, "rampage", true, true)  -- light burst, stay armed
+                S.killAllStatus = "rampage: " .. #living .. " up"
+
+                -- Ground mode: stomp one KO'd body per cycle (farms SavedStomps).
+                if S.rampageStomp and not S.rampageSky and not S.stompInProgress then
+                    for _, p in ipairs(wave) do
+                        local c = p.Character
+                        if c and koState(c) then
+                            task.spawn(function() doStomp(p, false) end)
+                            break
+                        end
+                    end
+                end
+            end)
+            if not ok then S.killAllStatus = "rampage err: " .. tostring(err) end
+            -- Jittered pacing, kept above killAllCooldown so runKillPlayers' own
+            -- cooldown guard never trips and we stay under the kick rate.
+            task.wait(S.killAllCooldown + 0.05 + math.random() * 0.08)
+        end
+    end)
+
     -- ─── Input ────────────────────────────────────────────────────────────────
     local UIS         = game:GetService("UserInputService")
     local RunService  = game:GetService("RunService")
@@ -1306,9 +1372,10 @@ local function boot()
         killStatus:Label(function() return "Aura:     " .. (S.killAura and "on" or "off") end)
         killStatus:Info("K = kill all  |  L = kill selected  |  scroll = cycle targets  |  P = menu")
 
-        -- ─── Utility tab (kill aura only) ────────────────────────────────────────
+        -- ─── Utility tab ─────────────────────────────────────────────────────────
         local utilTab = win:Tab("Utility", "target")
         local auraSec = utilTab:Section("Kill Aura", "Left", "auto-kill in radius")
+        local rampSec = utilTab:Section("RAMPAGE",   "Right", "whole-server wipe")
 
         auraSec:Toggle("Kill aura", S.killAura, function(on)
             S.killAura = on and true or false
@@ -1316,6 +1383,24 @@ local function boot()
         end, "Auto-kill every enemy inside the radius")
         auraSec:Slider("Aura radius", S.auraRadius, 5, 20, 250, " studs", function(v)
             S.auraRadius = tonumber(v) or S.auraRadius
+        end)
+
+        -- RAMPAGE — continuous whole-server wipe
+        rampSec:Toggle("RAMPAGE (wipe server)", S.rampage, function(on)
+            S.rampage = on and true or false
+            S.killAllStatus = S.rampage and "RAMPAGE on" or "RAMPAGE off"
+        end, "Continuously instakill the entire lobby, paced under the kick threshold")
+        rampSec:Toggle("Sky perch (untouchable)", S.rampageSky, function(on)
+            S.rampageSky = on and true or false
+        end, "Float above gun range — you stay lethal, they can't reach you")
+        rampSec:Slider("Perch height", S.rampageHeight, 25, 100, 1500, " studs", function(v)
+            S.rampageHeight = tonumber(v) or S.rampageHeight
+        end)
+        rampSec:Toggle("Stomp KO'd (ground)", S.rampageStomp, function(on)
+            S.rampageStomp = on and true or false
+        end, "Ground mode only: stomp downed bodies (farms SavedStomps)")
+        rampSec:Slider("Targets / wave", S.rampageWave, 1, 2, 8, " tgt", function(v)
+            S.rampageWave = tonumber(v) or S.rampageWave
         end)
 
         notify("BetterVoid", "loaded — K=kill all  L=kill selected", "success")
