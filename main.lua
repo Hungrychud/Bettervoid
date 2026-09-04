@@ -1141,38 +1141,52 @@ local function boot()
     end
 
     -- ─── Click-to-kill (aim at a player, click, head-snap burst) ───────────────
-    -- Same head-snap kill as "kill selected", but the target is whichever player
-    -- is nearest your mouse cursor when you click (forgiving = consistent — a
-    -- pixel-perfect ray missed constantly). Matcha can't project world→screen
-    -- (WorldToViewportPoint / ViewportPointToRay all fail) and has no mouse.Hit,
-    -- so we project each head to the screen by hand from the camera CFrame + FOV
-    -- + viewport and pick the closest to GetMouse().X/Y within a pixel radius.
-    local AIM_MAX_PX = 150
+    -- Kill whoever's head is nearest the crosshair when you left-click (forgiving
+    -- = consistent). Matcha DOES expose a native projector, WorldToScreen(pos) ->
+    -- (Vector2 screenPos, onScreenBool), in the SAME pixel space as GetMouse (both
+    -- full-viewport — verified live: centre mouse = 1280,720 on a 2560x1440 view).
+    -- This is far more accurate than the old hand-rolled camera-FOV math, which was
+    -- the reason click-kill kept missing. In this game the mouse is locked to
+    -- screen-centre, so GetMouse IS the crosshair; fall back to viewport centre.
+    local AIM_MAX_PX = 350   -- viewport is 2560-wide here; keep it forgiving
+    -- world -> screen: prefer Matcha's WorldToScreen, else hand-project as fallback.
+    local function projectToScreen(cam, pos)
+        if type(WorldToScreen) == "function" then
+            local sp, onScreen
+            local ok = pcall(function() sp, onScreen = WorldToScreen(pos) end)
+            if ok and sp then return sp.X, sp.Y, onScreen == true end
+        end
+        local vp = cam.ViewportSize
+        if not vp or vp.X == 0 then return nil end
+        local cs    = cam.CFrame:PointToObjectSpace(pos)
+        local depth = -cs.Z
+        if depth <= 0 then return nil end
+        local aspect  = vp.X / vp.Y
+        local tanHalf = math.tan(math.rad(cam.FieldOfView) / 2)
+        local sx = ((cs.X / depth) / (tanHalf * aspect) * 0.5 + 0.5) * vp.X
+        local sy = (1 - ((cs.Y / depth) / tanHalf * 0.5 + 0.5)) * vp.Y
+        return sx, sy, true
+    end
     local function getAimPlayer()
         local cam = workspace.CurrentCamera
         if not cam then return nil end
-        local mx, my, vp, fov
-        local okm = pcall(function()
-            local m = lp:GetMouse()
-            mx, my = m.X, m.Y
-            vp  = cam.ViewportSize
-            fov = cam.FieldOfView
-        end)
-        if not okm or not vp or vp.X == 0 or not mx then return nil end
-        local aspect  = vp.X / vp.Y
-        local tanHalf = math.tan(math.rad(fov) / 2)
+        local mx, my
+        pcall(function() local m = lp:GetMouse() mx, my = m.X, m.Y end)
+        if not mx then
+            local vp = cam.ViewportSize
+            if not vp then return nil end
+            mx, my = vp.X / 2, vp.Y / 2
+        end
         local best, bestPlayer
         for _, q in ipairs(Players:GetPlayers()) do
             if not samePlayer(q, lp) and not isFriendly(q) then
                 local char = q.Character
                 local head = char and (char:FindFirstChild("Head") or char:FindFirstChild("HumanoidRootPart"))
-                if head then
+                local _, valid = getKillTarget(q)   -- skip dead / KO'd bodies
+                if head and valid then
                     pcall(function()
-                        local cs = cam.CFrame:PointToObjectSpace(head.Position)
-                        local depth = -cs.Z
-                        if depth > 0 then
-                            local sx = ((cs.X / depth) / (tanHalf * aspect) * 0.5 + 0.5) * vp.X
-                            local sy = (1 - ((cs.Y / depth) / tanHalf * 0.5 + 0.5)) * vp.Y
+                        local sx, sy, onScreen = projectToScreen(cam, head.Position)
+                        if sx and onScreen then
                             local d = math.sqrt((sx - mx) ^ 2 + (sy - my) ^ 2)
                             if d <= AIM_MAX_PX and (not best or d < best) then
                                 best = d; bestPlayer = q
@@ -1216,16 +1230,25 @@ local function boot()
         end)
     end)
 
-    -- Left-click detection via iskeypressed(0x01) (VK_LBUTTON). Matcha's
-    -- UIS.InputBegan does NOT report mouse buttons reliably, so we poll the
-    -- physical button and fire on the press edge. Skipped while the menu holds
-    -- the cursor so clicking UI buttons doesn't dump your mag.
-    if type(iskeypressed) == "function" then
+    -- Left-click detection. Matcha's UIS.InputBegan does NOT report mouse buttons
+    -- reliably, and iskeypressed(0x01)/VK_LBUTTON does NOT detect the mouse either
+    -- (that was why click-kill never fired). Matcha exposes a dedicated
+    -- ismouse1pressed() — use it, and only fall back to iskeypressed on executors
+    -- that lack it. Poll on the press edge. Skipped while the menu holds the cursor
+    -- so clicking UI buttons doesn't fire a kill.
+    local hasClickPoll = type(ismouse1pressed) == "function" or type(iskeypressed) == "function"
+    if hasClickPoll then
         local lmbDown = false
         dumpConn = RunService.Heartbeat:Connect(function()
             if not S.running then return end
             local pressed = false
-            pcall(function() pressed = iskeypressed(0x01) == true end)
+            pcall(function()
+                if type(ismouse1pressed) == "function" then
+                    pressed = ismouse1pressed() == true
+                else
+                    pressed = iskeypressed(0x01) == true
+                end
+            end)
             if pressed and not lmbDown then
                 lmbDown = true
                 if S.dumpOnClick and not gameInputCaptured and not S.dumpInProgress then
@@ -1294,8 +1317,8 @@ local function boot()
     else
         win = Lib:CreateWindow({
             title             = "Better Void",
-            subtitle          = "Instant Kill",
-            size              = Vector2.new(620, 430),
+            subtitle          = "Combat Suite",
+            size              = Vector2.new(660, 470),
             position          = Vector2.new(48, 48),
             menuKey           = "p",
             theme             = { accent = Color3.fromRGB(80, 170, 255) },
@@ -1314,20 +1337,58 @@ local function boot()
             gameInput         = false, -- menu captures input (free cursor = UI
                                         -- clickable); our own driver handles WASD
                                         -- so you can still walk while it's open
+            -- Fresh, clean config namespace. The old default folder
+            -- ("INSui_Better Void") holds cross-version configs whose row paths no
+            -- longer exist (Load restored nothing) plus a corrupted _autoload that
+            -- applied junk appearance every boot (menu key mb5, collapsed sidebar,
+            -- perf mode = "settings messed up"). A new folder starts clean: saves
+            -- use current row paths, and nothing auto-loads unexpectedly.
+            -- NOTE: distinct name — "BetterVoid" collides (case-insensitively) with
+            -- the script's own source folder in the executor sandbox, which would
+            -- dump config .json files next to loader.lua/main.lua.
+            configFolder      = "BetterVoidConfigs",
+            configName        = "default",
             startOpen         = true,
         })
 
         if win.AddSettingsTab then win:AddSettingsTab("cog") end
 
-        local killTab = win:Tab("Instant Kill", "target")
+        -- ═══ COMBAT TAB ══════════════════════════════════════════════════════════
+        local combatTab = win:Tab("Combat", "target")
+        local targetSec = combatTab:Section("Target", "Left",  "pick who dies")
+        local fireSec   = combatTab:Section("Fire",   "Left",  "pull the trigger")
+        local statusSec = combatTab:Section("Status",  "Right", "live readout")
 
-        local killControls = killTab:Section("Controls", "Left",  "target and fire")
-        local killStatus   = killTab:Section("Status",   "Right", "live state")
-        handles.finderSection = killTab:Section("People Finder", "Right", "player list")
+        -- Searchable, auto-refreshing player picker. Replaces the old button-spam
+        -- "people finder": one dropdown you can type into and click a name.
+        local function playerNames()
+            local names = {}
+            for _, p in ipairs(Players:GetPlayers()) do
+                if not samePlayer(p, lp) then names[#names + 1] = p.Name end
+            end
+            table.sort(names)
+            return names
+        end
+        local targetDrop = targetSec:Dropdown("Pick target", {}, playerNames, false, function(sel)
+            local name = type(sel) == "table" and sel[1] or sel
+            if not name then return end
+            local p = findPlayerByName(name)
+            if p then
+                setKillTarget(p)
+                notify("Target", S.killTargetName, "success")
+            else
+                S.killAllStatus = "not found: " .. tostring(name)
+            end
+        end, "Type to search, click a name to lock it", true)
+        -- The dropdown snapshots its list when opened, so keep it fresh in the bg.
+        task.spawn(function()
+            while S.running do
+                pcall(function() if targetDrop and targetDrop.Refresh then targetDrop:Refresh() end end)
+                task.wait(2)
+            end
+        end)
 
-        -- TARGET
-        killControls:Divider("Target")
-        handles.targetBox = killControls:Textbox("Target name", S.killTargetInput or "", function(value)
+        handles.targetBox = targetSec:Textbox("Or type a name", S.killTargetInput or "", function(value)
             local text = tostring(value or ""):match("^%s*(.-)%s*$")
             S.killTargetInput = text
             if text == "" then
@@ -1348,112 +1409,151 @@ local function boot()
             end
         end, "Exact or partial name")
 
-        killControls:Button("Select nearest", function()
+        targetSec:Button("Nearest", function()
             local ok = selectNearest()
             notify("Target", ok and S.killTargetName or S.killAllStatus, ok and "success" or "warning")
-        end)
-        killControls:Button("Previous target", function()
+        end, "Lock the closest living enemy")
+        targetSec:Button("Previous", function()
             local ok = selectStep(-1)
             notify("Target", ok and S.killTargetName or S.killAllStatus, ok and "success" or "warning")
         end)
-        killControls:Button("Next target", function()
+        targetSec:Button("Next", function()
             local ok = selectStep(1)
             notify("Target", ok and S.killTargetName or S.killAllStatus, ok and "success" or "warning")
         end)
-        killControls:Button("Clear target", function()
+        targetSec:Button("Clear", function()
             setKillTarget(nil)
             S.killAllStatus = "cleared"
             notify("Target", "cleared", "info")
         end)
-        killControls:Button("Open people finder", function()
-            openFinder()
-        end)
-        handles.finderSection:Button("Refresh list", function()
-            openFinder()
-        end)
-        handles.finderSection:Info("Type name above to filter. Click player to select.")
-
-        -- AUTO
-        killControls:Divider("Auto")
-        autoKillToggle = killControls:Toggle("Auto kill + stomp selected", S.autoKillTarget, function(on)
-            S.autoKillTarget = on and true or false
-            S.killAllStatus = S.autoKillTarget and "auto on" or "auto off"
-        end)
-        killControls:Toggle("TP to target on respawn", S.tpToSpawn, function(on)
-            S.tpToSpawn = on and true or false
-        end)
-        dumpToggle = killControls:Toggle("Click to kill (aim at player)", S.dumpOnClick, function(on)
-            S.dumpOnClick = on and true or false
-            S.killAllStatus = S.dumpOnClick and "click-kill on" or "click-kill off"
-        end)
-        killControls:Toggle("Auto retaliate (kill attackers)", S.retaliate, function(on)
-            S.retaliate = on and true or false
-            S.killAllStatus = S.retaliate and "retaliate on" or "retaliate off"
-        end)
+        targetSec:Info("Mouse-wheel also cycles targets.")
 
         -- FIRE
-        killControls:Divider("Fire")
-        killControls:Button("Kill selected [L]", function()
+        fireSec:Button("Kill selected", function()
             task.spawn(function()
                 local ok = killSelected()
                 notify("Kill", S.killAllStatus, ok and "success" or "warning")
             end)
-        end):SetRisk()
-        killControls:Button("Kill all [K]", function()
+        end, "hotkey: L"):SetRisk()
+        fireSec:Button("Kill all", function()
             task.spawn(function()
                 local ok = killAll()
                 notify("Kill all", S.killAllStatus, ok and "success" or "warning")
             end)
-        end):SetRisk()
+        end, "hotkey: K"):SetRisk()
+        fireSec:Divider("Safety")
+        fireSec:Button("Panic — kill switch", function()
+            S.autoKillTarget = false
+            S.dumpOnClick    = false
+            S.retaliate      = false
+            S.killAura       = false
+            S.rampage        = false
+            S.killAllStatus  = "PANIC: all auto off"
+            notify("Panic", "every auto feature disabled", "warning")
+        end, "Instantly turn OFF every automatic feature")
 
         -- STATUS
-        killStatus:Label(function() return "Target:   " .. tostring(S.killTargetName or "none") end)
-        killStatus:Label(function() return "Status:   " .. tostring(S.killAllStatus) end)
-        killStatus:Label(function()
+        statusSec:Label(function() return "Target   : " .. tostring(S.killTargetName or "none") end)
+        statusSec:Label(function()
             local p = getSelectedPlayer()
-            if not p then return "HP:       —" end
+            if not p then return "HP       : —" end
             local char = p.Character
             local hum  = char and char:FindFirstChildOfClass("Humanoid")
-            if not hum then return "HP:       —" end
-            return "HP:       " .. math.floor(tonumber(hum.Health) or 0) .. "/" .. math.floor(tonumber(hum.MaxHealth) or 100)
+            if not hum then return "HP       : —" end
+            return "HP       : " .. math.floor(tonumber(hum.Health) or 0) .. "/" .. math.floor(tonumber(hum.MaxHealth) or 100)
         end)
-        killStatus:Label(function() return "Auto:     " .. (S.autoKillTarget and "on" or "off") end)
-        killStatus:Label(function() return "ClickKill:" .. (S.dumpOnClick and " on" or " off") end)
-        killStatus:Label(function() return "Retaliate:" .. (S.retaliate and " on" or " off") end)
-        killStatus:Label(function() return "Aura:     " .. (S.killAura and "on" or "off") end)
-        killStatus:Info("K = kill all  |  L = kill selected  |  scroll = cycle targets  |  P = menu")
+        statusSec:Label(function() return "Status   : " .. tostring(S.killAllStatus) end)
+        statusSec:Divider("Feature state")
+        statusSec:Label(function() return "Auto     : " .. (S.autoKillTarget and "ON" or "off") end)
+        statusSec:Label(function() return "ClickKill: " .. (S.dumpOnClick and "ON" or "off") end)
+        statusSec:Label(function() return "Retaliate: " .. (S.retaliate and "ON" or "off") end)
+        statusSec:Label(function() return "Aura     : " .. (S.killAura and "ON" or "off") end)
+        statusSec:Label(function() return "Rampage  : " .. (S.rampage and "ON" or "off") end)
+        statusSec:Info("K = kill all  •  L = kill selected  •  scroll = cycle  •  P = menu")
 
-        -- ─── Utility tab ─────────────────────────────────────────────────────────
-        local utilTab = win:Tab("Utility", "target")
-        local auraSec = utilTab:Section("Kill Aura", "Left", "auto-kill in radius")
-        local rampSec = utilTab:Section("RAMPAGE",   "Right", "whole-server wipe")
+        -- ═══ AUTOMATION TAB ══════════════════════════════════════════════════════
+        local autoTab = win:Tab("Automation", "eye")
+        local autoSec = autoTab:Section("Auto Target", "Left",  "hands-off killing")
+        local defSec  = autoTab:Section("Defense",     "Left",  "hit back")
+        local auraSec = autoTab:Section("Kill Aura",   "Right", "auto-kill in radius")
 
-        auraSec:Toggle("Kill aura", S.killAura, function(on)
+        local autoRow = autoSec:Toggle("Auto kill + stomp selected", S.autoKillTarget, function(on)
+            S.autoKillTarget = on and true or false
+            S.killAllStatus = S.autoKillTarget and "auto on" or "auto off"
+        end, "Kill the selected target on sight, stomp when KO'd, re-kill on respawn")
+        autoKillToggle = autoRow
+        autoSec:Toggle("TP to target on respawn", S.tpToSpawn, function(on)
+            S.tpToSpawn = on and true or false
+        end, "Drop onto the target the instant they respawn"):DependsOn(autoRow)
+        dumpToggle = autoSec:Toggle("Click to kill (aim at player)", S.dumpOnClick, function(on)
+            S.dumpOnClick = on and true or false
+            S.killAllStatus = S.dumpOnClick and "click-kill on" or "click-kill off"
+        end, "Left-click kills whoever is nearest your crosshair")
+
+        defSec:Toggle("Auto retaliate", S.retaliate, function(on)
+            S.retaliate = on and true or false
+            S.killAllStatus = S.retaliate and "retaliate on" or "retaliate off"
+        end, "Instantly kill anyone who shoots at you")
+
+        local auraRow = auraSec:Toggle("Kill aura", S.killAura, function(on)
             S.killAura = on and true or false
             S.killAllStatus = S.killAura and "aura on" or "aura off"
         end, "Auto-kill every enemy inside the radius")
-        auraSec:Slider("Aura radius", S.auraRadius, 5, 20, 250, " studs", function(v)
+        auraSec:Slider("Aura radius", S.auraRadius, 5, 10, 250, " studs", function(v)
             S.auraRadius = tonumber(v) or S.auraRadius
-        end)
+        end):DependsOn(auraRow)
 
-        -- RAMPAGE — continuous whole-server wipe
-        rampSec:Toggle("RAMPAGE (wipe server)", S.rampage, function(on)
+        -- ═══ RAMPAGE TAB ═════════════════════════════════════════════════════════
+        local rampTab = win:Tab("Rampage", "shield-check")
+        local rampSec = rampTab:Section("Whole-server wipe", "Left",  "delete the lobby")
+        local noteSec = rampTab:Section("How it works",      "Right", "read me")
+
+        local rampRow = rampSec:Toggle("RAMPAGE (wipe server)", S.rampage, function(on)
             S.rampage = on and true or false
             S.killAllStatus = S.rampage and "RAMPAGE on" or "RAMPAGE off"
         end, "Continuously instakill the entire lobby, paced under the kick threshold")
-        rampSec:Toggle("Sky perch (untouchable)", S.rampageSky, function(on)
+        local skyRow = rampSec:Toggle("Sky perch (untouchable)", S.rampageSky, function(on)
             S.rampageSky = on and true or false
-        end, "Float above gun range — you stay lethal, they can't reach you")
-        rampSec:Slider("Perch height", S.rampageHeight, 25, 100, 1500, " studs", function(v)
+        end, "Float above gun range — you stay lethal, they can't reach you"):DependsOn(rampRow)
+        rampSec:Slider("Perch height", S.rampageHeight, 25, 50, 1500, " studs", function(v)
             S.rampageHeight = tonumber(v) or S.rampageHeight
-        end)
+        end):DependsOn(skyRow)
         rampSec:Toggle("Auto-stomp KO'd", S.rampageStomp, function(on)
             S.rampageStomp = on and true or false
-        end, "Chase + stomp every downed body server-wide (farms SavedStomps). In sky mode you drop briefly to stomp.")
-        rampSec:Slider("Targets / wave", S.rampageWave, 1, 2, 50, " tgt", function(v)
+        end, "Chase + stomp every downed body server-wide (farms SavedStomps)"):DependsOn(rampRow)
+        rampSec:Slider("Targets / wave", S.rampageWave, 1, 1, 20, " tgt", function(v)
             S.rampageWave = tonumber(v) or S.rampageWave
-        end)
-        rampSec:Info("Wave = enemies downed per packet. High = whole server at once = fast stomp-all, but that big damage burst is what trips the kick. 6 = safe, crank it if the server doesn't punish it.")
+        end):DependsOn(rampRow)
+
+        noteSec:Divider("Wave size")
+        noteSec:Info("Enemies downed per packet. Higher = faster whole-server wipe, but the big damage burst is what trips the kick. 6 is safe; crank it only if the server doesn't punish it.")
+        noteSec:Divider("Sky perch")
+        noteSec:Info("Their guns are range-limited server-side; yours isn't. Perch above their range and you wipe from a spot nobody can shoot.")
+
+        -- ═══ SETTINGS TAB: BetterVoid quick-fixes ════════════════════════════════
+        -- Lives alongside the lib's built-in Theme/Appearance/Interface/Config tabs.
+        -- One-click restore in case the appearance settings get into a weird state.
+        if win.SettingsSection then
+            local bvSet = win:SettingsSection("BetterVoid", "Left", "quick fixes")
+            bvSet:Button("Reset appearance", function()
+                pcall(function()
+                    Lib:SetMenuKey("p")
+                    Lib:SetOpacity(0.95)
+                    Lib:SetAccent(Color3.fromRGB(80, 170, 255), Color3.fromRGB(180, 120, 255))
+                    Lib:SetKeybindOverlay(true)
+                    Lib:SetRowLines(true)
+                    Lib:SetCheckboxStyle(true)
+                    Lib:SetPerformance(false)   -- undo "performance mode"
+                    Lib:SetLayout("side")       -- sidebar layout back
+                    Lib:SetBackgroundEffect("Rain")
+                    Lib:SetBackgroundEffectColor(Color3.fromRGB(80, 170, 255))
+                    Lib:SetSize(660, 470)
+                    Lib:Center()
+                end)
+                notify("Settings", "appearance reset — menu key = P", "success")
+            end, "Restore the default look + P menu key if settings got messed up")
+            bvSet:Info("Configs save to a fresh 'BetterVoid' folder. Use the Configs panel to Save/Load. Old configs from earlier versions won't load — the controls were renamed.")
+        end
 
         notify("BetterVoid", "loaded — K=kill all  L=kill selected", "success")
     end
