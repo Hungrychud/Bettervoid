@@ -41,6 +41,11 @@ local function boot()
         rampageWave      = 6,       -- targets per FireServer packet (your no-kick cap)
         rampageHeight    = 300,     -- studs up for sky perch (slider: raise if safe,
                                     -- lower if the server range-checks incoming damage)
+
+        -- ── Auto-buy armor ──────────────────────────────────────────────────
+        autoBuyArmor     = false,   -- keep armor topped up from the shop pad
+        armorThreshold   = 100,     -- buy when Armor < this (MaxArmor is 200)
+        armorStatus      = "idle",
     }
     _G.BV = S
 
@@ -1039,6 +1044,117 @@ local function boot()
         end
     end)
 
+    -- ─── Auto-buy armor ────────────────────────────────────────────────────────
+    -- Cash armor is bought by CLICKING a shop pad's ClickDetector — there is no
+    -- purchase remote (decompiling Framework shows the client only wires hover
+    -- highlights on the pads; the actual buy is the server's ClickDetector.
+    -- MouseClick handler). So we fire the detector directly. The real Matcha
+    -- executor env exposes fireclickdetector (primary path, no teleport needed);
+    -- if it's absent we fall back to TP-onto-the-pad + a hardware mouse click.
+    local ARMOR_PAD_NAME = "[Full Armor]"
+    local armorPadCache  = nil
+
+    -- Locate a Full-Armor shop pad (cached; re-resolved if it goes stale).
+    local function getArmorPad()
+        if armorPadCache and armorPadCache.Parent then
+            local cd = armorPadCache:FindFirstChildOfClass("ClickDetector")
+            if cd then return armorPadCache, cd end
+        end
+        armorPadCache = nil
+        local shop
+        pcall(function()
+            local ignored = workspace:FindFirstChild("Ignored")
+            shop = ignored and ignored:FindFirstChild("Shop")
+        end)
+        if not shop then return nil end
+        for _, m in ipairs(shop:GetChildren()) do
+            if string.sub(m.Name, 1, #ARMOR_PAD_NAME) == ARMOR_PAD_NAME then
+                local cd = m:FindFirstChildOfClass("ClickDetector")
+                if cd then armorPadCache = m; return m, cd end
+            end
+        end
+        return nil
+    end
+
+    -- Current / max armor from BodyEffects.Armor and ReplicatedStorage.MaxArmor.
+    local function armorValues()
+        local char = lp and lp.Character
+        local be   = char and char:FindFirstChild("BodyEffects")
+        local armor = be and be:FindFirstChild("Armor")
+        local maxObj
+        pcall(function() maxObj = game:GetService("ReplicatedStorage"):FindFirstChild("MaxArmor") end)
+        local cur = armor and tonumber(armor.Value)
+        local max = (maxObj and tonumber(maxObj.Value)) or 200
+        return cur, max
+    end
+
+    local function getCurrency()
+        local df = lp and lp:FindFirstChild("DataFolder")
+        local c  = df and df:FindFirstChild("Currency")
+        return c and tonumber(c.Value) or 0
+    end
+
+    local armorBuyBusy = false
+    local function buyArmor(reason)
+        if armorBuyBusy then return false end
+        armorBuyBusy = true
+        local ok = false
+        pcall(function()
+            local pad, cd = getArmorPad()
+            if not cd then S.armorStatus = "no armor pad"; return end
+            local priceObj = pad:FindFirstChild("Price")
+            local price = (priceObj and tonumber(priceObj.Value)) or 3639
+            if getCurrency() < price then S.armorStatus = "not enough $"; return end
+
+            -- Primary: fire the ClickDetector directly (no teleport).
+            if type(fireclickdetector) == "function" then
+                ok = pcall(function() fireclickdetector(cd) end)
+                S.armorStatus = ok and ("bought (" .. tostring(reason or "manual") .. ")")
+                                    or "fireclickdetector failed"
+                return
+            end
+
+            -- Fallback: no click primitive — TP onto the pad and hardware-click.
+            -- Best-effort: snap in front of the pad head, click screen-centre (the
+            -- game locks the cursor to centre), then return to where we were.
+            local root = getRoot()
+            local head = pad:FindFirstChild("Head") or (cd.Parent and cd.Parent:FindFirstChild("Head"))
+            if not root or not head then S.armorStatus = "no click primitive"; return end
+            if type(mouse1click) ~= "function" then S.armorStatus = "no click primitive"; return end
+            local saved = root.CFrame
+            local hp = head.Position
+            pcall(function() root.CFrame = CFrame.new(hp + Vector3.new(0, 0, 6), hp) end)
+            task.wait(0.15)
+            pcall(function() mouse1click() end)
+            task.wait(0.1)
+            pcall(function() root.CFrame = saved end)
+            S.armorStatus = "click-buy (fallback)"
+            ok = true
+        end)
+        armorBuyBusy = false
+        return ok
+    end
+    S.buyArmor = buyArmor
+
+    -- Top up armor whenever it drops below the threshold. Own throttle; the
+    -- getCurrency guard in buyArmor stops it firing when you can't afford it.
+    task.spawn(function()
+        while S.running do
+            local ok, err = pcall(function()
+                if not S.autoBuyArmor then return end
+                local cur, max = armorValues()
+                if not cur then S.armorStatus = "no armor value"; return end
+                local thr = math.min(tonumber(S.armorThreshold) or 100, max)
+                if cur < thr then
+                    buyArmor("auto")
+                    task.wait(0.5) -- let the server apply the armor before re-checking
+                end
+            end)
+            if not ok then S.armorStatus = "armor err: " .. tostring(err) end
+            task.wait(1)
+        end
+    end)
+
     -- ─── Input ────────────────────────────────────────────────────────────────
     local UIS         = game:GetService("UserInputService")
     local RunService  = game:GetService("RunService")
@@ -1448,6 +1564,7 @@ local function boot()
             S.retaliate      = false
             S.killAura       = false
             S.rampage        = false
+            S.autoBuyArmor   = false
             S.killAllStatus  = "PANIC: all auto off"
             notify("Panic", "every auto feature disabled", "warning")
         end, "Instantly turn OFF every automatic feature")
@@ -1469,6 +1586,7 @@ local function boot()
         statusSec:Label(function() return "Retaliate: " .. (S.retaliate and "ON" or "off") end)
         statusSec:Label(function() return "Aura     : " .. (S.killAura and "ON" or "off") end)
         statusSec:Label(function() return "Rampage  : " .. (S.rampage and "ON" or "off") end)
+        statusSec:Label(function() return "AutoArmor: " .. (S.autoBuyArmor and "ON" or "off") end)
         statusSec:Info("K = kill all  •  L = kill selected  •  scroll = cycle  •  P = menu")
 
         -- ═══ AUTOMATION TAB ══════════════════════════════════════════════════════
@@ -1502,6 +1620,27 @@ local function boot()
         auraSec:Slider("Aura radius", S.auraRadius, 5, 10, 250, " studs", function(v)
             S.auraRadius = tonumber(v) or S.auraRadius
         end):DependsOn(auraRow)
+
+        -- ARMOR — keep armor topped up from the shop pad
+        local armorSec = autoTab:Section("Armor", "Right", "keep armor topped")
+        local armorRow = armorSec:Toggle("Auto-buy armor", S.autoBuyArmor, function(on)
+            S.autoBuyArmor = on and true or false
+            S.armorStatus  = S.autoBuyArmor and "auto-buy on" or "auto-buy off"
+        end, "Buy Full Armor from the shop whenever it drops below the threshold")
+        armorSec:Slider("Buy below", S.armorThreshold, 5, 10, 200, " armor", function(v)
+            S.armorThreshold = tonumber(v) or S.armorThreshold
+        end):DependsOn(armorRow)
+        armorSec:Button("Buy armor now", function()
+            task.spawn(function()
+                local ok = buyArmor("manual")
+                notify("Armor", S.armorStatus, ok and "success" or "warning")
+            end)
+        end, "Buy one Full Armor immediately")
+        armorSec:Label(function()
+            local cur, max = armorValues()
+            return "Armor  : " .. (cur and (math.floor(cur) .. "/" .. math.floor(max)) or "—")
+        end)
+        armorSec:Label(function() return "Status : " .. tostring(S.armorStatus) end)
 
         -- ═══ RAMPAGE TAB ═════════════════════════════════════════════════════════
         local rampTab = win:Tab("Rampage", "shield-check")
