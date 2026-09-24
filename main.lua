@@ -409,30 +409,36 @@ local function boot()
         return tool.Parent == character
     end
 
-    local function buildKillPellets(targetPlayers)
-        local pellets = {}
-        local targetCount = 0
+    -- The game update renamed the combat action "ShootGun" -> "backdoor" and moved
+    -- the hit payload out of a pellet array (old arg4) into three positional slots:
+    --   FireServer("backdoor", handle, muzzlePos, nil, hitPart, hitPos, hitNormal, range, damage)
+    -- where (hitPart, hitPos, hitNormal) is the return of the game's GunHandler.Shoot
+    -- raycast. Each packet now carries ONE hit, so kill-all fires once per target.
+    -- We build the target hit list here (head part per living target).
+    local function buildKillHits(targetPlayers)
+        local hits = {}
         for _, player in ipairs(targetPlayers or {}) do
             local targetCharacter, valid = getKillTarget(player)
-            local head = targetCharacter and targetCharacter:FindFirstChild("Head")
+            local head = targetCharacter and (targetCharacter:FindFirstChild("Head")
+                       or targetCharacter:FindFirstChild("HumanoidRootPart"))
             if valid and head then
-                targetCount = targetCount + 1
-                local position = head.Position
-                for _ = 1, PELLETS_PER_TARGET do
-                    local jx = (math.random() - 0.5) * 0.5
-                    local jy = (math.random() - 0.5) * 0.5
-                    local jz = (math.random() - 0.5) * 0.5
-                    local jittered = position + Vector3.new(jx, jy, jz)
-                    pellets[#pellets + 1] = {
-                        AimPosition = jittered,
-                        Result1 = jittered,
-                        Result2 = head,
-                        Result3 = Vector3.yAxis
-                    }
-                end
+                hits[#hits + 1] = head
             end
         end
-        return pellets, targetCount
+        return hits, #hits
+    end
+
+    -- Muzzle world position the server expects as the shot origin. Prefers the
+    -- Handle's Muzzle attachment (what GunHandler.Shoot raycasts from), falling back
+    -- to the mesh muzzle, then the handle itself.
+    local function muzzleWorldPos(tool, handle)
+        local m = handle and handle:FindFirstChild("Muzzle")
+        if m then return m.WorldPosition end
+        local mesh = tool:FindFirstChild("Default")
+        mesh = mesh and mesh:FindFirstChild("Mesh")
+        local dm = mesh and mesh:FindFirstChild("Muzzle")
+        if dm then return dm.WorldPosition end
+        return handle and handle.Position or Vector3.zero
     end
 
     local function runKillPlayers(targetPlayers, label, burst)
@@ -456,8 +462,8 @@ local function boot()
             return false
         end
 
-        local pellets, targetCount = buildKillPellets(targetPlayers)
-        if #pellets == 0 then
+        local hits, targetCount = buildKillHits(targetPlayers)
+        if #hits == 0 then
             S.killAllStatus = label and (label .. ": no targets") or "no targets"
             return false
         end
@@ -480,16 +486,31 @@ local function boot()
         local handle = tool:FindFirstChild("Handle")
         if not handle then S.killAllStatus = "handle missing"; return false end
 
+        -- New "backdoor" contract carries one hit per packet, so we fire once per
+        -- target per shot. HITS_PER_TARGET stacks a few packets on each target so a
+        -- single burst is lethal (the old pellet array delivered PELLETS_PER_TARGET
+        -- hits at once; we spread the equivalent across quick packets instead).
+        local HITS_PER_TARGET = light and 3 or 6
         local fired = 0
         for shot = 1, burst do
             handle = tool:FindFirstChild("Handle")
             if not handle then break end
-            local shotPellets = shot == 1 and pellets or buildKillPellets(targetPlayers)
-            if #shotPellets == 0 then break end
-            local okFire = pcall(function()
-                remote:FireServer("ShootGun", handle, handle.Position, shotPellets, nil, nil, nil, range, damage)
-            end)
-            if okFire then fired = fired + 1 end
+            local shotHits = shot == 1 and hits or buildKillHits(targetPlayers)
+            if #shotHits == 0 then break end
+            local muzzlePos = muzzleWorldPos(tool, handle)
+            for _, head in ipairs(shotHits) do
+                if head and head.Parent then
+                    for _ = 1, HITS_PER_TARGET do
+                        local hitPos = head.Position
+                        local normal = muzzlePos - hitPos
+                        normal = normal.Magnitude > 0 and normal.Unit or Vector3.yAxis
+                        local okFire = pcall(function()
+                            remote:FireServer("backdoor", handle, muzzlePos, nil, head, hitPos, normal, range, damage)
+                        end)
+                        if okFire then fired = fired + 1 end
+                    end
+                end
+            end
             if shot < burst then task.wait(SHOT_DELAY) end
         end
 
@@ -550,8 +571,8 @@ local function boot()
         return out
     end
 
-    -- Real, server-side gun equip. The server only accepts ShootGun from a gun it
-    -- sees EQUIPPED. Matcha has no humanoid:EquipTool, and a client tool.Parent =
+    -- Real, server-side gun equip. The server only accepts a "backdoor" shot from a
+    -- gun it sees EQUIPPED. Matcha has no humanoid:EquipTool, and a client tool.Parent =
     -- character is LOCAL-ONLY — it never reaches the server, so shots do nothing
     -- when you aren't actually holding a gun (proven live: equipped client-side,
     -- fired, zero damage). The one thing that DOES replicate is a real hardware
