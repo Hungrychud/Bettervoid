@@ -1,5 +1,5 @@
--- BetterVoid obfuscated loader (Matcha)
--- Paste into Matcha: reads the local workspace file, no HttpGet.
+
+
 local p='Bet'..'ter'  local q='Void/'
 local r='loa'..'der'  local s='.'..'lua'
 local path=p..q..r..s

@@ -1,5 +1,5 @@
--- BetterVoid loader
--- Executor: loadstring(readfile("BetterVoid/loader.lua"))()
+
+
 
 local function stripBom(s)
     if type(s) == "string" and s:byte(1) == 239 and s:byte(2) == 187 and s:byte(3) == 191 then

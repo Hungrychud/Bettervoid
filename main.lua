@@ -11,17 +11,17 @@ local function boot()
 
     if _G.BV and _G.BV.unload then pcall(_G.BV.unload) end
 
-    -- ─── State ───────────────────────────────────────────────────────────────
+
     local S = {
         running          = true,
         killAllCooldown  = 0.35,
         lastKillAllAt    = 0,
-        autoKillTarget   = false,   -- single auto mode: kill + stomp the selected target
+        autoKillTarget   = false,
         stompInProgress  = false,
-        tpToSpawn        = false,   -- follow the target to their respawn point instead of retreating
-        dumpOnClick      = false,   -- toggle: left-click empties the whole mag at the crosshair
+        tpToSpawn        = false,
+        dumpOnClick      = false,
         dumpInProgress   = false,
-        retaliate        = false,   -- toggle: instant-kill anyone who shoots at you
+        retaliate        = false,
         killTargetUserId = nil,
         killTargetName   = "none",
         killTargetInput  = "",
@@ -29,57 +29,57 @@ local function boot()
         killInProgress   = false,
         killInProgressAt = 0,
 
-        -- ── Kill aura ───────────────────────────────────────────────────────
-        killAura         = false,   -- auto-kill every enemy inside auraRadius
-        auraRadius       = 60,      -- studs
 
-        -- ── RAMPAGE (whole-server wipe) ─────────────────────────────────────
-        rampage          = false,   -- continuously chunk-kill the entire server
-        rampageSky       = false,   -- perch at altitude (server range-limits THEIR
-                                    -- guns, not yours) = untouchable ranged wipe
-        rampageStomp     = true,    -- ground mode: stomp KO'd bodies (farms SavedStomps)
-        rampageWave      = 6,       -- targets per FireServer packet (your no-kick cap)
-        rampageHeight    = 300,     -- studs up for sky perch (slider: raise if safe,
-                                    -- lower if the server range-checks incoming damage)
+        killAura         = false,
+        auraRadius       = 60,
 
-        -- ── Auto-buy armor ──────────────────────────────────────────────────
-        autoBuyArmor     = false,   -- keep armor topped up from the shop pad
-        armorThreshold   = 100,     -- buy when Armor < this (MaxArmor is 200)
+
+        rampage          = false,
+        rampageSky       = false,
+
+        rampageStomp     = true,
+        rampageWave      = 6,
+        rampageHeight    = 300,
+
+
+
+        autoBuyArmor     = false,
+        armorThreshold   = 100,
         armorStatus      = "idle",
     }
     _G.BV = S
 
-    -- ─── Kill constants ───────────────────────────────────────────────────────
+
     local PELLETS_PER_TARGET = 10
     local SHOT_BURST         = 3
-    -- Kill-all hits at most this many (nearest) targets per press. One FireServer
-    -- against the whole server at once is an obvious mass-damage signature that
-    -- gets the client kicked (looks like a crash). 0 = no cap.
+
+
+
     local AUTO_MAX_TARGETS   = 6
     local SHOT_DELAY         = 0.065
     local EQUIP_DELAY        = 0.06
-    -- Stomp / retreat tuning
-    local STOMP_MAX_ATTEMPTS = 1      -- (legacy) single precise stomp on the target
-    local STOMP_STICK_TIME   = 1.2    -- max seconds to stick + re-fire stomp on a KO'd target
-    local STOMP_STICK_STEP   = 0.05   -- re-snap onto target + re-stomp every 0.05s (tracks fast/macro movement)
-    local SKY_HEIGHT         = 1500   -- studs straight up = out of every gun's range
-    local SKY_HOLD           = 0.7    -- seconds pinned in the sky (nobody can shoot you)
-    -- Auto-retaliate tuning
-    local RETALIATE_RADIUS   = 22     -- studs: enemy's aim (MousePos) this close to my body = "shooting at me"
-    local RETALIATE_CD       = 0.5    -- per-attacker cooldown so one shooter isn't re-killed every frame
+
+    local STOMP_MAX_ATTEMPTS = 1
+    local STOMP_STICK_TIME   = 1.2
+    local STOMP_STICK_STEP   = 0.05
+    local SKY_HEIGHT         = 1500
+    local SKY_HOLD           = 0.7
+
+    local RETALIATE_RADIUS   = 22
+    local RETALIATE_CD       = 0.5
     local LOADOUT            = { "[Double-Barrel SG]", "[Revolver]", "[TacticalShotgun]", "None" }
     local GUN_NAMES          = { ["[Double-Barrel SG]"] = true, ["[Revolver]"] = true, ["[TacticalShotgun]"] = true }
-    -- Kill-aura tuning
-    local AURA_STEP          = 0.3     -- seconds between kill-aura sweeps
 
-    -- ─── UI handles ──────────────────────────────────────────────────────────
+    local AURA_STEP          = 0.3
+
+
     local Lib, win
     local handles           = {}
     local finderButtons     = {}
     local autoKillToggle    = nil
     local dumpToggle        = nil
 
-    -- ─── Notify ──────────────────────────────────────────────────────────────
+
     local function notify(title, text, kind)
         if Lib and Lib.Notify then
             pcall(function() Lib:Notify(title, text, 2, kind or "info") end)
@@ -88,7 +88,7 @@ local function boot()
         print("[BV] " .. tostring(title) .. ": " .. tostring(text))
     end
 
-    -- ─── Character helpers ────────────────────────────────────────────────────
+
     local function getRoot()
         local char = lp and lp.Character
         return char and char:FindFirstChild("HumanoidRootPart")
@@ -106,10 +106,10 @@ local function boot()
         return lp and lp:FindFirstChild("Backpack"), lp and lp.Character
     end
 
-    -- After an instakill the game can leave the local gun in a "reloading" /
-    -- cooldown state, which makes your own gun refuse to shoot. Clear the client
-    -- gates (BodyEffects.Reload / GunFiring, ShotgunDebounce, tool Cooldown,
-    -- Ammo==0) locally so manual shooting works again.
+
+
+
+
     local function clearGunState(tool)
         local wchar
         pcall(function()
@@ -134,7 +134,7 @@ local function boot()
         end
     end
 
-    -- ─── Player helpers ───────────────────────────────────────────────────────
+
     local function samePlayer(a, b)
         return a and b and tonumber(a.UserId) ~= nil and tonumber(a.UserId) == tonumber(b.UserId)
     end
@@ -244,7 +244,7 @@ local function boot()
         return setKillTarget(candidates[idx])
     end
 
-    -- ─── Remotes ──────────────────────────────────────────────────────────────
+
     local killAllRemote = nil
     local loadoutRemote = nil
     local refillActive  = false
@@ -304,9 +304,9 @@ local function boot()
         return killAllRemote, loadoutRemote
     end
 
-    -- ─── Kill core ─────────────────────────────────────────────────────────────
-    -- Any gun works. Prefer the one already in hand (no swap = consistent);
-    -- Tactical is the best multi-target so it wins as a backpack pick.
+
+
+
     local GUN_PRIORITY = { "[TacticalShotgun]", "[Double-Barrel SG]", "[Revolver]" }
 
     local function isUsableGun(item)
@@ -322,7 +322,7 @@ local function boot()
         return nil
     end
 
-    -- Returns tool, wasEquipped
+
     local function getBestGun(character, backpack)
         local eq = getEquippedGun(character)
         if eq then return eq, true end
@@ -409,12 +409,12 @@ local function boot()
         return tool.Parent == character
     end
 
-    -- The game update renamed the combat action "ShootGun" -> "backdoor" and moved
-    -- the hit payload out of a pellet array (old arg4) into three positional slots:
-    --   FireServer("backdoor", handle, muzzlePos, nil, hitPart, hitPos, hitNormal, range, damage)
-    -- where (hitPart, hitPos, hitNormal) is the return of the game's GunHandler.Shoot
-    -- raycast. Each packet now carries ONE hit, so kill-all fires once per target.
-    -- We build the target hit list here (head part per living target).
+
+
+
+
+
+
     local function buildKillHits(targetPlayers)
         local hits = {}
         for _, player in ipairs(targetPlayers or {}) do
@@ -428,9 +428,9 @@ local function boot()
         return hits, #hits
     end
 
-    -- Muzzle world position the server expects as the shot origin. Prefers the
-    -- Handle's Muzzle attachment (what GunHandler.Shoot raycasts from), falling back
-    -- to the mesh muzzle, then the handle itself.
+
+
+
     local function muzzleWorldPos(tool, handle)
         local m = handle and handle:FindFirstChild("Muzzle")
         if m then return m.WorldPosition end
@@ -474,8 +474,8 @@ local function boot()
         local damage = damageObject and (tonumber(damageObject.Value) or 50) or 50
         local humanoid = getHumanoid()
 
-        -- Equip only if empty-handed, then LEAVE it equipped afterwards. No
-        -- unequip / loadout-swap, which is what glitched the player's own gun.
+
+
         if not wasEquipped then
             if not equipKillTool(tool, character, humanoid) then
                 S.killAllStatus = "equip failed"
@@ -486,10 +486,10 @@ local function boot()
         local handle = tool:FindFirstChild("Handle")
         if not handle then S.killAllStatus = "handle missing"; return false end
 
-        -- New "backdoor" contract carries one hit per packet, so we fire once per
-        -- target per shot. HITS_PER_TARGET stacks a few packets on each target so a
-        -- single burst is lethal (the old pellet array delivered PELLETS_PER_TARGET
-        -- hits at once; we spread the equivalent across quick packets instead).
+
+
+
+
         local HITS_PER_TARGET = light and 3 or 6
         local fired = 0
         for shot = 1, burst do
@@ -514,7 +514,7 @@ local function boot()
             if shot < burst then task.wait(SHOT_DELAY) end
         end
 
-        -- Keep the player's own gun ready to shoot.
+
         clearGunState(tool)
 
         S.killAllStatus = (label and (label .. ": ") or "") .. "fired " .. tostring(fired) .. "x / " .. tostring(targetCount) .. " target(s)"
@@ -522,8 +522,8 @@ local function boot()
     end
 
     local function killPlayers(targetPlayers, label, _isRetry, light)
-        -- Timestamp-based lock that auto-expires, so a leaked flag can never
-        -- permanently wedge kill (this was the "kill all works once" bug).
+
+
         if not _isRetry then
             if S.killInProgress and (tick() - (S.killInProgressAt or 0)) < 2 then
                 S.killAllStatus = "already firing"
@@ -532,17 +532,17 @@ local function boot()
             S.killInProgress = true
             S.killInProgressAt = tick()
         end
-        -- Auto (looping) mode fires a single burst and skips the retry pass; the
-        -- loop itself retries next cycle. This avoids the mass-damage remote spam
-        -- that trips anticheat / kicks the client when auto-killing.
+
+
+
         local burst = light and 1 or SHOT_BURST
         local ok, result = pcall(function() return runKillPlayers(targetPlayers, label, burst) end)
         if not _isRetry then S.killInProgress = false end
         if not ok then S.killAllStatus = "kill error"; return false end
 
-        -- Retry pass fires directly; runKillPlayers' own cooldown guard prevents
-        -- overlap, so it must NOT touch the shared killInProgress flag (that was
-        -- how the flag leaked true and blocked all later kills).
+
+
+
         if result and not _isRetry and not light then
             local retryTargets = targetPlayers
             local retryLabel = label
@@ -571,37 +571,37 @@ local function boot()
         return out
     end
 
-    -- Real, server-side gun equip. The server only accepts a "backdoor" shot from a
-    -- gun it sees EQUIPPED. Matcha has no humanoid:EquipTool, and a client tool.Parent =
-    -- character is LOCAL-ONLY — it never reaches the server, so shots do nothing
-    -- when you aren't actually holding a gun (proven live: equipped client-side,
-    -- fired, zero damage). The one thing that DOES replicate is a real hardware
-    -- keystroke via keypress(): tapping a hotbar slot (1/2/3) makes the engine
-    -- equip the gun for real, server and all (proven live: keypress a slot, fire,
-    -- target 40 -> 4 HP + KO). So when you're bare we tap a hotbar slot to equip a
-    -- gun for you, then fire normally. Now every kill works even when you're not
-    -- holding your gun. We cache the slot that worked so later equips are instant.
-    local HOTBAR_SLOTS = { 0x31, 0x32, 0x33 } -- keys 1, 2, 3 = the three guns
+
+
+
+
+
+
+
+
+
+
+    local HOTBAR_SLOTS = { 0x31, 0x32, 0x33 }
     local function realEquipGun()
         local _, character = getGunContainers()
         if not character then return nil end
         local existing = getEquippedGun(character)
         if existing then return existing end
         if type(keypress) ~= "function" then return nil end
-        -- ROTATE which gun we grab each time so we use EVERY weapon (1 -> 2 -> 3 ->
-        -- 1 ...), not just slot 1's Double-Barrel. Spreads the shooting across all
-        -- three guns so no single one runs out of ammo. Order starts at the next
-        -- slot in the rotation and wraps, so if one slot is empty/fails we still
-        -- fall through to another.
+
+
+
+
+
         S._equipRotate = (S._equipRotate or 0) % #HOTBAR_SLOTS + 1
         local order = {}
         for i = 0, #HOTBAR_SLOTS - 1 do
             order[#order + 1] = HOTBAR_SLOTS[((S._equipRotate - 1 + i) % #HOTBAR_SLOTS) + 1]
         end
-        -- keypress occasionally misses, so retry the whole sweep a few times until
-        -- a gun is actually in hand. Returning nil (never equipped) is important:
-        -- the caller must NOT fall through to firing, or it "fires" with no gun
-        -- server-side and deals zero damage (that was the intermittent no-damage).
+
+
+
+
         for _ = 1, 3 do
             for _, code in ipairs(order) do
                 pcall(function() keypress(code) end)
@@ -615,16 +615,16 @@ local function boot()
         return nil
     end
 
-    -- Tap a hotbar slot again to holster the gun we auto-equipped (verified:
-    -- pressing the equipped slot toggles it back off, server-side). Delayed so the
-    -- shot (and the full-burst retry pass ~0.35s later) lands first, then we go
-    -- bare again — quick equip → shoot → unequip.
+
+
+
+
     local function quickUnequip(slot, light)
         if type(keypress) ~= "function" or not slot then return end
         task.spawn(function()
-            task.wait(light and 0.1 or 0.45) -- let the burst (+ retry) land first
-            -- keypress occasionally misses, so re-tap the slot until we're actually
-            -- bare (each successful tap toggles the equipped gun back off).
+            task.wait(light and 0.1 or 0.45)
+
+
             for _ = 1, 4 do
                 local _, character = getGunContainers()
                 if not (character and getEquippedGun(character)) then break end
@@ -636,12 +636,12 @@ local function boot()
         end)
     end
 
-    -- Route every kill through here. If you're holding a gun, fire immediately; if
-    -- you're bare, tap a hotbar slot to real-equip, fire, then tap it again to
-    -- holster — so you flash the gun out, shoot, and go bare again fast. Makes
-    -- retaliate / auto / click / kill-all all work whether or not you're holding
-    -- your gun. light = single ammo-cheap burst (auto/retaliate); nil = full burst.
-    -- keepArmed = stay equipped after firing (auto loop, which fires continuously).
+
+
+
+
+
+
     local function smartKill(victims, label, light, keepArmed)
         local _, character = getGunContainers()
         local selfEquipped = false
@@ -651,21 +651,21 @@ local function boot()
             end
             S.killInProgress = true; S.killInProgressAt = tick()
             local g = nil
-            pcall(function() g = realEquipGun() end)  -- keypress the hotbar to equip for real
+            pcall(function() g = realEquipGun() end)
             selfEquipped = g ~= nil
             S.killInProgress = false
-            -- Couldn't get a gun in hand → abort. Firing now would hit the useless
-            -- local-only equip fallback and deal no damage; better to no-op than to
-            -- report a fake "fired". (Usually means the Roblox window isn't focused,
-            -- since keypress needs real OS input.)
+
+
+
+
             if not selfEquipped then
                 S.killAllStatus = (label and (label .. ": ") or "") .. "equip failed (focus window)"
                 return false
             end
         end
         local res = killPlayers(victims, label, false, light)
-        -- Holster again only if WE equipped it (never yank a gun you chose to hold)
-        -- and the caller isn't asking to stay armed for continuous fire.
+
+
         if selfEquipped and not keepArmed then quickUnequip(S._equipSlot, light) end
         return res
     end
@@ -680,24 +680,24 @@ local function boot()
         return smartKill({ p }, p.Name)
     end
 
-    -- Expose for keybinds / external calls / debugging.
+
     S.killAll      = killAll
     S.smartKill    = smartKill
     S.killSelected = killSelected
 
-    -- ─── Stomp ──────────────────────────────────────────────────────────────
-    -- Is this character currently KO'd (down, stompable)?
+
+
     local function koState(char)
         local be = char and char:FindFirstChild("BodyEffects")
         local ko = be and be:FindFirstChild("K.O")
         return ko ~= nil and ko.Value == true
     end
 
-    -- Teleport onto a KO'd body and stomp until it goes down, then rocket
-    -- straight up out of gun range and hold so nobody can shoot you during the
-    -- exposed stomp moment. Whole body pcall-wrapped with a GUARANTEED reset of
-    -- stompInProgress — a leaked flag permanently blocked every future stomp
-    -- (that was the "stomp stopped working" bug). One stomp at a time.
+
+
+
+
+
     local function doStomp(targetPlayer, retreat)
         if S.stompInProgress then return end
         if not targetPlayer then return end
@@ -705,18 +705,18 @@ local function boot()
         S.stompInProgress = true
         local ok, err = pcall(function()
             local remote = resolveRemotes()
-            -- Note: RunService.Heartbeat:Wait() is unsupported in Matcha (errors),
-            -- so the glue loop paces with task.wait instead.
 
-            -- STICK-TO-TARGET stomp: macroing targets slide fast. A loose loop
-            -- (re-snap every 0.05s) lets them slip between snaps, so the server
-            -- sees us off them and the stomp raycast misses. Instead we GLUE onto
-            -- their CURRENT root every ~0.03s (as tight as the client can move)
-            -- while firing Stomp on a throttle. Always exactly on them when the
-            -- server processes the stomp, no matter how fast they move. Ends the
-            -- moment KO clears (stomp landed / dead) or STOMP_STICK_TIME cap.
-            -- (RunService.Heartbeat:Wait() is unsupported in Matcha, so we pace
-            -- the glue with task.wait — a tight loop with no yield would freeze.)
+
+
+
+
+
+
+
+
+
+
+
             local stickDeadline = tick() + STOMP_STICK_TIME
             local lastFire = 0
             while S.running and tick() < stickDeadline do
@@ -724,16 +724,16 @@ local function boot()
                 local targetRoot = char and char:FindFirstChild("HumanoidRootPart")
                 local myRoot     = getRoot()
                 if not targetRoot or not myRoot then break end
-                if not koState(char) then break end -- done (dead / respawned / up)
+                if not koState(char) then break end
 
-                -- Glue onto the target's live position (same XZ, just above their
-                -- root) so we track their movement frame-perfect.
+
+
                 local tp = targetRoot.Position
                 pcall(function()
                     myRoot.CFrame = CFrame.new(tp.X, tp.Y + 2, tp.Z)
                 end)
-                -- Throttle the actual Stomp fire so we don't spam the remote, but
-                -- keep the position glued every frame in between.
+
+
                 if remote and tick() - lastFire >= STOMP_STICK_STEP then
                     lastFire = tick()
                     pcall(function() remote:FireServer("Stomp") end)
@@ -761,7 +761,7 @@ local function boot()
         if not ok then S.killAllStatus = "stomp err: " .. tostring(err) end
     end
 
-    -- State of the selected target: is the character alive / KO'd right now?
+
     local function targetState(char)
         local hum = char and (char:FindFirstChild("Humanoid") or char:FindFirstChildOfClass("Humanoid"))
         local be  = char and char:FindFirstChild("BodyEffects")
@@ -771,15 +771,15 @@ local function boot()
         return alive, koed
     end
 
-    -- ─── Auto kill + stomp loop (selected target only) ─────────────────────────
-    -- One target, one job: kill it while it's up, stomp it while it's KO'd,
-    -- re-kill the instant it respawns. Never hops to another player. Whole body
-    -- pcall'd so a transient error can never freeze or stop the loop.
+
+
+
+
     task.spawn(function()
         local lastTgtKillAt = 0
         local lastStompAt   = 0
-        local lastChar      = nil   -- last target character we've seen (respawn edge detect)
-        local stompedChar   = nil   -- character we've already stomped (stomp once per KO)
+        local lastChar      = nil
+        local stompedChar   = nil
         while S.running do
             local ok, err = pcall(function()
                 if not S.autoKillTarget then return end
@@ -788,10 +788,10 @@ local function boot()
                 if not p then S.killAllStatus = "auto: no target"; return end
                 local char = p.Character
 
-                -- Respawn follow: the target died and came back as a NEW character.
-                -- Teleport onto it (their spawn point) so we're on them the instant
-                -- they respawn. Only advance lastChar once the new body has a root,
-                -- so we don't miss the edge while it's still loading.
+
+
+
+
                 if char and char ~= lastChar then
                     local hrp = char:FindFirstChild("HumanoidRootPart")
                     if hrp then
@@ -809,23 +809,23 @@ local function boot()
 
                 local alive, koed = targetState(char)
                 if koed then
-                    -- Stomp this KO'd body exactly ONCE. Without this the loop
-                    -- re-fired every 0.6s while they stayed down — spamming stomps
-                    -- and yanking you back out of the sky retreat each time.
+
+
+
                     if char ~= stompedChar and not S.stompInProgress and now - lastStompAt >= 0.6 then
                         lastStompAt = now
                         stompedChar = char
-                        -- If following to spawn, skip the sky retreat (we want to
-                        -- drop straight onto them when they respawn, not fly away).
+
+
                         task.spawn(function() doStomp(p, not S.tpToSpawn) end)
                     end
                 elseif alive then
-                    stompedChar = nil -- back up again: allow a fresh stomp next KO
+                    stompedChar = nil
                     if now - lastTgtKillAt >= 0.35 then
                         lastTgtKillAt = now
-                        -- smartKill: fast single burst; auto-equips if bare. keepArmed
-                        -- so we DON'T holster between the 0.35s cycles (auto fires
-                        -- continuously — flicker-equipping every cycle would be slow).
+
+
+
                         smartKill({ p }, "auto", true, true)
                     end
                 end
@@ -835,20 +835,20 @@ local function boot()
         end
     end)
 
-    -- ─── Auto retaliate: instant-kill anyone who shoots at you ─────────────────
-    -- Each character exposes BodyEffects.GunFiring (true while firing) and
-    -- BodyEffects.MousePos (the world point they're aiming at). An enemy is
-    -- "shooting AT me" when they fire AND their aim lands on my body. We detect
-    -- the fire on the rising edge (per-attacker) so we don't re-trigger every
-    -- frame they hold it, plus a health-drop fallback that kills whoever is
-    -- aiming closest to me the instant I actually take damage. Independent of
-    -- the auto/selected target — never touches your selection. Whole body pcall'd
-    -- so it can't freeze. Uses the light single-burst kill (ammo-cheap one-shot).
+
+
+
+
+
+
+
+
+
     task.spawn(function()
         local lastHealth = nil
-        local prevFiring = {}   -- [userId] = GunFiring last frame (rising-edge detect)
-        local prevShots  = {}   -- [userId] = GunShotChanges last frame (backup fire signal)
-        local lastKillAt = {}   -- [userId] = tick of last retaliate kill (per-attacker CD)
+        local prevFiring = {}
+        local prevShots  = {}
+        local lastKillAt = {}
         while S.running do
             local ok, err = pcall(function()
                 if not S.retaliate then lastHealth = nil; return end
@@ -856,7 +856,7 @@ local function boot()
                 local hum  = char and char:FindFirstChildOfClass("Humanoid")
                 if not hum then lastHealth = nil; return end
 
-                -- My body reference points (aim landing near any = a hit on me).
+
                 local myParts = {}
                 for _, n in ipairs({ "Head", "HumanoidRootPart", "UpperTorso", "LowerTorso" }) do
                     local part = char:FindFirstChild(n)
@@ -880,7 +880,7 @@ local function boot()
                             local gf  = be:FindFirstChild("GunFiring")
                             local gsc = be:FindFirstChild("GunShotChanges")
 
-                            -- Closest distance from their aim point to my body.
+
                             local aimDist = math.huge
                             if mp then
                                 local ap = mp.Value
@@ -898,7 +898,7 @@ local function boot()
                             prevFiring[uid] = firing
                             prevShots[uid]  = shots
 
-                            -- Proactive: they just fired AND aimed at me → kill.
+
                             if firedEdge and aimDist <= RETALIATE_RADIUS then
                                 if now - (lastKillAt[uid] or 0) >= RETALIATE_CD then
                                     lastKillAt[uid] = now
@@ -908,14 +908,14 @@ local function boot()
                                 end
                             end
 
-                            -- Remember the closest aimer for the damage fallback.
+
                             if aimDist < dmgBest then dmgBest = aimDist; dmgSuspect = p end
                         end
                     end
                 end
 
-                -- Fallback: I lost HP this frame but no rising edge caught it (fast
-                -- shot between polls) → kill whoever is aiming closest to me.
+
+
                 if tookDamage and dmgSuspect and dmgBest <= RETALIATE_RADIUS * 2 then
                     local uid = tonumber(dmgSuspect.UserId)
                     if now - (lastKillAt[uid] or 0) >= RETALIATE_CD then
@@ -931,10 +931,10 @@ local function boot()
         end
     end)
 
-    -- ─── Kill aura ──────────────────────────────────────────────────────────────
-    -- Auto-kill every living enemy within auraRadius. Uses the light single-burst
-    -- kill and routes through smartKill's own cooldown + capTargets so it can't
-    -- spam the mass-damage remote (same anticheat guard as auto/retaliate).
+
+
+
+
     task.spawn(function()
         while S.running do
             local ok, err = pcall(function()
@@ -957,18 +957,18 @@ local function boot()
         end
     end)
 
-    -- ─── RAMPAGE: whole-server wipe ───────────────────────────────────────────────
-    -- Range + damage + hit-part are all client-supplied and the server trusts them
-    -- verbatim (confirmed by decompiling GunHandler: the shot uses `p33.Range or
-    -- 200` with no server-side re-derivation). So we can perch at altitude — out of
-    -- every ENEMY gun's server-side range — and still instakill the whole lobby from
-    -- above. We chunk-kill S.rampageWave targets per FireServer packet (the proven
-    -- no-kick cap) on the killAllCooldown, with timing jitter to blur the cadence.
-    -- Stomp sweep: TP-hop across EVERY currently-KO'd enemy and Stomp each until it
-    -- clears (dies / gets up). This is the "stomp everyone KO'd" pass — you can only
-    -- be on one body at a time, so it's serial but fast (~each body a few Stomp
-    -- fires). Own in-progress guard so passes never overlap; independent of the
-    -- single-target doStomp's stompInProgress lock.
+
+
+
+
+
+
+
+
+
+
+
+
     local rampStompActive = false
     local function rampageStompSweep()
         if rampStompActive then return end
@@ -976,7 +976,7 @@ local function boot()
         pcall(function()
             local remote = resolveRemotes()
             if not remote then return end
-            -- Snapshot all KO'd enemies, nearest-first, then work the whole list.
+
             local myRoot = getRoot()
             local kod = {}
             for _, p in ipairs(getKillCandidates()) do
@@ -994,14 +994,14 @@ local function boot()
                 end)
             end
             for _, p in ipairs(kod) do
-                -- Stick onto this body and Stomp until KO clears or a short cap, then
-                -- move to the next KO'd body. Cap keeps one tough body from stalling
-                -- the whole sweep.
+
+
+
                 local deadline = tick() + 0.4
                 while S.running and S.rampage and tick() < deadline do
                     local c = p.Character
                     local r = c and c:FindFirstChild("HumanoidRootPart")
-                    if not r or not koState(c) then break end   -- done: dead / up
+                    if not r or not koState(c) then break end
                     local mr = getRoot()
                     if mr then
                         pcall(function() mr.CFrame = CFrame.new(r.Position.X, r.Position.Y + 2, r.Position.Z) end)
@@ -1021,37 +1021,37 @@ local function boot()
                 local root = getRoot()
                 if not root then return end
 
-                -- Sky perch: re-assert altitude each cycle. Their guns are range-
-                -- limited server-side; ours isn't, so we stay untouchable while still
-                -- lethal. Skip while a stomp sweep is running so we don't yank
-                -- ourselves off the bodies mid-stomp (sweep drops us to ground).
+
+
+
+
                 if S.rampageSky and not rampStompActive then
                     pcall(function()
                         root.CFrame = CFrame.new(root.Position.X, S.rampageHeight, root.Position.Z)
                     end)
                 end
 
-                -- Gather living enemies (getKillCandidates already sorts nearest-first).
-                -- getKillTarget's valid flag is false for KO'd bodies, so the kill wave
-                -- never re-shoots someone who's already down — they STAY KO'd until the
-                -- stomp sweep finishes them (no kill-vs-stomp race).
+
+
+
+
                 local living = {}
                 for _, p in ipairs(getKillCandidates()) do
                     local _, valid = getKillTarget(p)
                     if valid then living[#living + 1] = p end
                 end
 
-                -- One chunk this tick (rampageWave cap). The loop deletes the rest
-                -- over the next few ticks, all under the mass-damage kick threshold.
+
+
                 if #living > 0 then
                     local cap  = math.max(1, math.min(#living, tonumber(S.rampageWave) or 6))
                     local wave = {}
                     for i = 1, cap do wave[i] = living[i] end
-                    smartKill(wave, "rampage", true, true)  -- light burst, stay armed
+                    smartKill(wave, "rampage", true, true)
                 end
 
-                -- Stomp EVERYONE currently KO'd (full sweep in its own task so the
-                -- kill cadence keeps running while we hop bodies).
+
+
                 if S.rampageStomp and not rampStompActive then
                     task.spawn(rampageStompSweep)
                 end
@@ -1059,23 +1059,23 @@ local function boot()
                 S.killAllStatus = "rampage: " .. #living .. " up"
             end)
             if not ok then S.killAllStatus = "rampage err: " .. tostring(err) end
-            -- Jittered pacing, kept above killAllCooldown so runKillPlayers' own
-            -- cooldown guard never trips and we stay under the kick rate.
+
+
             task.wait(S.killAllCooldown + 0.05 + math.random() * 0.08)
         end
     end)
 
-    -- ─── Auto-buy armor ────────────────────────────────────────────────────────
-    -- Cash armor is bought by CLICKING a shop pad's ClickDetector — there is no
-    -- purchase remote (decompiling Framework shows the client only wires hover
-    -- highlights on the pads; the actual buy is the server's ClickDetector.
-    -- MouseClick handler). So we fire the detector directly. The real Matcha
-    -- executor env exposes fireclickdetector (primary path, no teleport needed);
-    -- if it's absent we fall back to TP-onto-the-pad + a hardware mouse click.
+
+
+
+
+
+
+
     local ARMOR_PAD_NAME = "[Full Armor]"
     local armorPadCache  = nil
 
-    -- Locate a Full-Armor shop pad (cached; re-resolved if it goes stale).
+
     local function getArmorPad()
         if armorPadCache and armorPadCache.Parent then
             local cd = armorPadCache:FindFirstChildOfClass("ClickDetector")
@@ -1097,7 +1097,7 @@ local function boot()
         return nil
     end
 
-    -- Current / max armor from BodyEffects.Armor and ReplicatedStorage.MaxArmor.
+
     local function armorValues()
         local char = lp and lp.Character
         local be   = char and char:FindFirstChild("BodyEffects")
@@ -1127,7 +1127,7 @@ local function boot()
             local price = (priceObj and tonumber(priceObj.Value)) or 3639
             if getCurrency() < price then S.armorStatus = "not enough $"; return end
 
-            -- Primary: fire the ClickDetector directly (no teleport).
+
             if type(fireclickdetector) == "function" then
                 ok = pcall(function() fireclickdetector(cd) end)
                 S.armorStatus = ok and ("bought (" .. tostring(reason or "manual") .. ")")
@@ -1135,9 +1135,9 @@ local function boot()
                 return
             end
 
-            -- Fallback: no click primitive — TP onto the pad and hardware-click.
-            -- Best-effort: snap in front of the pad head, click screen-centre (the
-            -- game locks the cursor to centre), then return to where we were.
+
+
+
             local root = getRoot()
             local head = pad:FindFirstChild("Head") or (cd.Parent and cd.Parent:FindFirstChild("Head"))
             if not root or not head then S.armorStatus = "no click primitive"; return end
@@ -1157,8 +1157,8 @@ local function boot()
     end
     S.buyArmor = buyArmor
 
-    -- Top up armor whenever it drops below the threshold. Own throttle; the
-    -- getCurrency guard in buyArmor stops it firing when you can't afford it.
+
+
     task.spawn(function()
         while S.running do
             local ok, err = pcall(function()
@@ -1168,7 +1168,7 @@ local function boot()
                 local thr = math.min(tonumber(S.armorThreshold) or 100, max)
                 if cur < thr then
                     buyArmor("auto")
-                    task.wait(0.5) -- let the server apply the armor before re-checking
+                    task.wait(0.5)
                 end
             end)
             if not ok then S.armorStatus = "armor err: " .. tostring(err) end
@@ -1176,7 +1176,7 @@ local function boot()
         end
     end)
 
-    -- ─── Input ────────────────────────────────────────────────────────────────
+
     local UIS         = game:GetService("UserInputService")
     local RunService  = game:GetService("RunService")
     local scrollConn  = nil
@@ -1184,9 +1184,9 @@ local function boot()
     local moveConn    = nil
     local dumpConn    = nil
     local lastScrollAt = 0
-    -- The UI lib grabs ALL input while the window is open (free cursor so you can
-    -- click), which kills WASD movement. We track that "captured" state and drive
-    -- movement ourselves so you can walk AND click at the same time.
+
+
+
     local gameInputCaptured = false
 
     pcall(function()
@@ -1200,8 +1200,8 @@ local function boot()
         end
     end)
 
-    -- Manual movement driver (Matcha: Humanoid:Move is unbound, so we set
-    -- AssemblyLinearVelocity directly). Only runs while the menu has input.
+
+
     if type(iskeypressed) == "function" then
         moveConn = RunService.Heartbeat:Connect(function()
             if not S.running or not gameInputCaptured then return end
@@ -1219,16 +1219,16 @@ local function boot()
                 right = Vector3.new(right.X, 0, right.Z)
 
                 local dir = Vector3.new(0, 0, 0)
-                if iskeypressed(0x57) then dir = dir + look  end -- W
-                if iskeypressed(0x53) then dir = dir - look  end -- S
-                if iskeypressed(0x44) then dir = dir + right end -- D
-                if iskeypressed(0x41) then dir = dir - right end -- A
+                if iskeypressed(0x57) then dir = dir + look  end
+                if iskeypressed(0x53) then dir = dir - look  end
+                if iskeypressed(0x44) then dir = dir + right end
+                if iskeypressed(0x41) then dir = dir - right end
 
                 local ws = 16
                 pcall(function() ws = tonumber(hum.WalkSpeed) or 16 end)
                 local v  = hrp.AssemblyLinearVelocity
                 local yv = v.Y
-                if iskeypressed(0x20) and math.abs(yv) < 1 then yv = 50 end -- Space = jump
+                if iskeypressed(0x20) and math.abs(yv) < 1 then yv = 50 end
 
                 if dir.Magnitude > 0.05 then
                     dir = dir.Unit
@@ -1257,8 +1257,8 @@ local function boot()
         end)
     end)
 
-    -- Robust key match: Matcha's `input.KeyCode == Enum.KeyCode.K` can fail
-    -- (Enum comparison unsupported), so fall back to numeric/.Value/string match.
+
+
     local function keyMatches(input, keyName, fallbackCode)
         if not input then return false end
         local keyCode = nil
@@ -1277,16 +1277,16 @@ local function boot()
         return text == wanted or string.sub(text, -#wanted) == wanted
     end
 
-    -- ─── Click-to-kill (aim at a player, click, head-snap burst) ───────────────
-    -- Kill whoever's head is nearest the crosshair when you left-click (forgiving
-    -- = consistent). Matcha DOES expose a native projector, WorldToScreen(pos) ->
-    -- (Vector2 screenPos, onScreenBool), in the SAME pixel space as GetMouse (both
-    -- full-viewport — verified live: centre mouse = 1280,720 on a 2560x1440 view).
-    -- This is far more accurate than the old hand-rolled camera-FOV math, which was
-    -- the reason click-kill kept missing. In this game the mouse is locked to
-    -- screen-centre, so GetMouse IS the crosshair; fall back to viewport centre.
-    local AIM_MAX_PX = 350   -- viewport is 2560-wide here; keep it forgiving
-    -- world -> screen: prefer Matcha's WorldToScreen, else hand-project as fallback.
+
+
+
+
+
+
+
+
+    local AIM_MAX_PX = 350
+
     local function projectToScreen(cam, pos)
         if type(WorldToScreen) == "function" then
             local sp, onScreen
@@ -1319,7 +1319,7 @@ local function boot()
             if not samePlayer(q, lp) and not isFriendly(q) then
                 local char = q.Character
                 local head = char and (char:FindFirstChild("Head") or char:FindFirstChild("HumanoidRootPart"))
-                local _, valid = getKillTarget(q)   -- skip dead / KO'd bodies
+                local _, valid = getKillTarget(q)
                 if head and valid then
                     pcall(function()
                         local sx, sy, onScreen = projectToScreen(cam, head.Position)
@@ -1336,9 +1336,9 @@ local function boot()
         return bestPlayer
     end
 
-    -- On click: kill the player under the crosshair with the full head-snap burst
-    -- + retry (identical to "kill selected"). dumpInProgress serializes rapid
-    -- clicks so bursts can't stack.
+
+
+
     local function clickKill()
         if S.dumpInProgress then return end
         S.dumpInProgress = true
@@ -1352,27 +1352,27 @@ local function boot()
     end
 
     pcall(function()
-        -- No gameProcessedEvent gate: in Matcha `gp` is often truthy for every
-        -- key, which silently swallowed every hotkey.
+
+
         hotkeyConn = UIS.InputBegan:Connect(function(input)
             if not S.running then return end
             local focused = false
             pcall(function() focused = UIS:GetFocusedTextBox() ~= nil end)
             if focused then return end
             if keyMatches(input, "K", 107) then
-                task.spawn(killAll)          -- K = instant kill all
+                task.spawn(killAll)
             elseif keyMatches(input, "L", 108) then
-                task.spawn(killSelected)     -- L = kill selected target only
+                task.spawn(killSelected)
             end
         end)
     end)
 
-    -- Left-click detection. Matcha's UIS.InputBegan does NOT report mouse buttons
-    -- reliably, and iskeypressed(0x01)/VK_LBUTTON does NOT detect the mouse either
-    -- (that was why click-kill never fired). Matcha exposes a dedicated
-    -- ismouse1pressed() — use it, and only fall back to iskeypressed on executors
-    -- that lack it. Poll on the press edge. Skipped while the menu holds the cursor
-    -- so clicking UI buttons doesn't fire a kill.
+
+
+
+
+
+
     local hasClickPoll = type(ismouse1pressed) == "function" or type(iskeypressed) == "function"
     if hasClickPoll then
         local lmbDown = false
@@ -1397,7 +1397,7 @@ local function boot()
         end)
     end
 
-    -- ─── People finder ────────────────────────────────────────────────────────
+
     local function clearFinder()
         for _, b in ipairs(finderButtons) do
             pcall(function()
@@ -1437,7 +1437,7 @@ local function boot()
         notify("People finder", shown > 0 and (shown .. " players") or "no matches", shown > 0 and "success" or "warning")
     end
 
-    -- ─── UI ───────────────────────────────────────────────────────────────────
+
     local function loadLib()
         local ok, result = pcall(function()
             return loadstring(game:HttpGet("https://raw.githubusercontent.com/neaxusxgod-png/INS-ui/main/uilib.min.lua"))()
@@ -1471,18 +1471,18 @@ local function boot()
             backgroundEffectColor = Color3.fromRGB(80, 170, 255),
             autoSave          = false,
             smartFps          = true,
-            gameInput         = false, -- menu captures input (free cursor = UI
-                                        -- clickable); our own driver handles WASD
-                                        -- so you can still walk while it's open
-            -- Fresh, clean config namespace. The old default folder
-            -- ("INSui_Better Void") holds cross-version configs whose row paths no
-            -- longer exist (Load restored nothing) plus a corrupted _autoload that
-            -- applied junk appearance every boot (menu key mb5, collapsed sidebar,
-            -- perf mode = "settings messed up"). A new folder starts clean: saves
-            -- use current row paths, and nothing auto-loads unexpectedly.
-            -- NOTE: distinct name — "BetterVoid" collides (case-insensitively) with
-            -- the script's own source folder in the executor sandbox, which would
-            -- dump config .json files next to loader.lua/main.lua.
+            gameInput         = false,
+
+
+
+
+
+
+
+
+
+
+
             configFolder      = "BetterVoidConfigs",
             configName        = "default",
             startOpen         = true,
@@ -1490,14 +1490,14 @@ local function boot()
 
         if win.AddSettingsTab then win:AddSettingsTab("cog") end
 
-        -- ═══ COMBAT TAB ══════════════════════════════════════════════════════════
+
         local combatTab = win:Tab("Combat", "target")
         local targetSec = combatTab:Section("Target", "Left",  "pick who dies")
         local fireSec   = combatTab:Section("Fire",   "Left",  "pull the trigger")
         local statusSec = combatTab:Section("Status",  "Right", "live readout")
 
-        -- Searchable, auto-refreshing player picker. Replaces the old button-spam
-        -- "people finder": one dropdown you can type into and click a name.
+
+
         local function playerNames()
             local names = {}
             for _, p in ipairs(Players:GetPlayers()) do
@@ -1517,7 +1517,7 @@ local function boot()
                 S.killAllStatus = "not found: " .. tostring(name)
             end
         end, "Type to search, click a name to lock it", true)
-        -- The dropdown snapshots its list when opened, so keep it fresh in the bg.
+
         task.spawn(function()
             while S.running do
                 pcall(function() if targetDrop and targetDrop.Refresh then targetDrop:Refresh() end end)
@@ -1565,7 +1565,7 @@ local function boot()
         end)
         targetSec:Info("Mouse-wheel also cycles targets.")
 
-        -- FIRE
+
         fireSec:Button("Kill selected", function()
             task.spawn(function()
                 local ok = killSelected()
@@ -1590,7 +1590,7 @@ local function boot()
             notify("Panic", "every auto feature disabled", "warning")
         end, "Instantly turn OFF every automatic feature")
 
-        -- STATUS
+
         statusSec:Label(function() return "Target   : " .. tostring(S.killTargetName or "none") end)
         statusSec:Label(function()
             local p = getSelectedPlayer()
@@ -1610,7 +1610,7 @@ local function boot()
         statusSec:Label(function() return "AutoArmor: " .. (S.autoBuyArmor and "ON" or "off") end)
         statusSec:Info("K = kill all  •  L = kill selected  •  scroll = cycle  •  P = menu")
 
-        -- ═══ AUTOMATION TAB ══════════════════════════════════════════════════════
+
         local autoTab = win:Tab("Automation", "eye")
         local autoSec = autoTab:Section("Auto Target", "Left",  "hands-off killing")
         local defSec  = autoTab:Section("Defense",     "Left",  "hit back")
@@ -1642,7 +1642,7 @@ local function boot()
             S.auraRadius = tonumber(v) or S.auraRadius
         end):DependsOn(auraRow)
 
-        -- ARMOR — keep armor topped up from the shop pad
+
         local armorSec = autoTab:Section("Armor", "Right", "keep armor topped")
         local armorRow = armorSec:Toggle("Auto-buy armor", S.autoBuyArmor, function(on)
             S.autoBuyArmor = on and true or false
@@ -1663,7 +1663,7 @@ local function boot()
         end)
         armorSec:Label(function() return "Status : " .. tostring(S.armorStatus) end)
 
-        -- ═══ RAMPAGE TAB ═════════════════════════════════════════════════════════
+
         local rampTab = win:Tab("Rampage", "shield-check")
         local rampSec = rampTab:Section("Whole-server wipe", "Left",  "delete the lobby")
         local noteSec = rampTab:Section("How it works",      "Right", "read me")
@@ -1690,9 +1690,9 @@ local function boot()
         noteSec:Divider("Sky perch")
         noteSec:Info("Their guns are range-limited server-side; yours isn't. Perch above their range and you wipe from a spot nobody can shoot.")
 
-        -- ═══ SETTINGS TAB: BetterVoid quick-fixes ════════════════════════════════
-        -- Lives alongside the lib's built-in Theme/Appearance/Interface/Config tabs.
-        -- One-click restore in case the appearance settings get into a weird state.
+
+
+
         if win.SettingsSection then
             local bvSet = win:SettingsSection("BetterVoid", "Left", "quick fixes")
             bvSet:Button("Reset appearance", function()
@@ -1703,8 +1703,8 @@ local function boot()
                     Lib:SetKeybindOverlay(true)
                     Lib:SetRowLines(true)
                     Lib:SetCheckboxStyle(true)
-                    Lib:SetPerformance(false)   -- undo "performance mode"
-                    Lib:SetLayout("side")       -- sidebar layout back
+                    Lib:SetPerformance(false)
+                    Lib:SetLayout("side")
                     Lib:SetBackgroundEffect("Rain")
                     Lib:SetBackgroundEffectColor(Color3.fromRGB(80, 170, 255))
                     Lib:SetSize(660, 470)
@@ -1718,7 +1718,7 @@ local function boot()
         notify("BetterVoid", "loaded — K=kill all  L=kill selected", "success")
     end
 
-    -- ─── Unload ───────────────────────────────────────────────────────────────
+
     S.unload = function()
         S.running = false
         clearFinder()

@@ -1955,7 +1955,7 @@ local function boot()
         local killStatus   = killTab:Section("Status",   "Right", "instant kill status")
         handles.peopleFinderSection = killTab:Section("People Finder", "Right", "player list")
 
-        -- VOID TAB — Controls
+
         toggle = controls:Toggle("Better Void", false, function(on)
             if syncingToggle then return end
             setEnabled(on, false)
@@ -1992,7 +1992,7 @@ local function boot()
             end)
         end)
 
-        -- VOID TAB — Utilities
+
         utilities:Divider("Presets")
         utilities:Button("Above map",   function() applyPreset("Above map") end)
         utilities:Button("Wide roam",   function() applyPreset("Wide roam") end)
@@ -2027,7 +2027,7 @@ local function boot()
         end, "Example: F")
         utilities:Button("Unload", function() S.unload() end):SetRisk()
 
-        -- VOID TAB — Status
+
         status:Label(function() return "Void: " .. (S.enabled and "ON" or "OFF") end)
         status:Label(function() return "Roam: " .. (S.roam and "ON" or "OFF") end)
         status:Label(function() return "Height: " .. tostring(S.height) end)
@@ -2050,7 +2050,7 @@ local function boot()
         status:Label(function() return "Force reset key: " .. tostring(S.resetKey or "F") end)
         status:Info("P menu, V void, K kill all, L selected kill, reset key, scroll = cycle target.")
 
-        -- INSTANT KILL TAB — Controls
+
         killControls:Divider("Target")
         handles.killTargetName = killControls:Textbox("Target name", S.killTargetInput or "", function(value)
             local text = tostring(value or ""):match("^%s*(.-)%s*$")
@@ -2144,7 +2144,7 @@ local function boot()
             S.killOnSightRange = math.floor(v)
         end)
 
-        -- INSTANT KILL TAB — Status
+
         killStatus:Label(function() return "Target: " .. tostring(S.killTargetName or "none") end)
         killStatus:Label(function() return "Typed: " .. tostring(S.killTargetInput or "") end)
         killStatus:Label(function() return "Status: " .. tostring(S.killAllStatus) end)

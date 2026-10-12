@@ -1,5 +1,5 @@
--- Better Void INS-ui loader.
--- Matcha: loadstring(readfile("BetterVoid/loader.lua"))()
+
+
 
 local function stripBom(source)
     if type(source) == "string" and source:byte(1) == 239 and source:byte(2) == 187 and source:byte(3) == 191 then

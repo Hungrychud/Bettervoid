@@ -11,7 +11,7 @@ local function boot()
 
     if _G.BV and _G.BV.unload then pcall(_G.BV.unload) end
 
-    -- ─── State ───────────────────────────────────────────────────────────────
+
     local S = {
         running          = true,
         killAllCooldown  = 0.35,
@@ -34,24 +34,24 @@ local function boot()
     }
     _G.BV = S
 
-    -- ─── Kill constants ───────────────────────────────────────────────────────
+
     local PELLETS_PER_TARGET = 10
     local SHOT_BURST         = 3
-    -- Auto "all"/"sight" hit at most this many (nearest) targets per cycle. One
-    -- FireServer hitting the whole server at once is an obvious mass-damage
-    -- signature that gets the client kicked (looks like a crash). Spreading the
-    -- kills across cycles keeps each shot plausible. 0 = no cap.
+
+
+
+
     local AUTO_MAX_TARGETS   = 6
     local SHOT_DELAY         = 0.065
     local EQUIP_DELAY        = 0.06
-    -- Stomp / retreat tuning
-    local STOMP_MAX_ATTEMPTS = 4      -- re-fire Stomp until the body actually goes down
-    local SKY_HEIGHT         = 1500   -- studs straight up = out of every gun's range
-    local SKY_HOLD           = 0.7    -- seconds pinned in the sky (nobody can shoot you)
+
+    local STOMP_MAX_ATTEMPTS = 4
+    local SKY_HEIGHT         = 1500
+    local SKY_HOLD           = 0.7
     local LOADOUT            = { "[Double-Barrel SG]", "[Revolver]", "[TacticalShotgun]", "None" }
     local GUN_NAMES          = { ["[Double-Barrel SG]"] = true, ["[Revolver]"] = true, ["[TacticalShotgun]"] = true }
 
-    -- ─── UI handles ──────────────────────────────────────────────────────────
+
     local Lib, win
     local handles              = {}
     local finderButtons        = {}
@@ -61,7 +61,7 @@ local function boot()
     local autoRetargetToggle   = nil
     local autoKillAllStompToggle = nil
 
-    -- ─── Notify ──────────────────────────────────────────────────────────────
+
     local function notify(title, text, kind)
         if Lib and Lib.Notify then
             pcall(function() Lib:Notify(title, text, 2, kind or "info") end)
@@ -71,7 +71,7 @@ local function boot()
         print("[BV] " .. tostring(title) .. ": " .. tostring(text))
     end
 
-    -- ─── Character helpers ────────────────────────────────────────────────────
+
     local function getRoot()
         local char = lp and lp.Character
         return char and char:FindFirstChild("HumanoidRootPart")
@@ -89,11 +89,11 @@ local function boot()
         return lp and lp:FindFirstChild("Backpack"), lp and lp.Character
     end
 
-    -- After an instakill the game can leave the local gun in a "reloading" /
-    -- cooldown state (esp. if the kill grabbed the tool mid manual-reload),
-    -- which makes your own gun refuse to shoot. GetCanShoot (client) gates on
-    -- BodyEffects.Reload / GunFiring, char attr ShotgunDebounce, tool attr
-    -- Cooldown, and Ammo==0. Clear them locally so manual shooting works again.
+
+
+
+
+
     local function clearGunState(tool)
         local wchar
         pcall(function()
@@ -118,7 +118,7 @@ local function boot()
         end
     end
 
-    -- ─── Player helpers ───────────────────────────────────────────────────────
+
     local function samePlayer(a, b)
         return a and b and tonumber(a.UserId) ~= nil and tonumber(a.UserId) == tonumber(b.UserId)
     end
@@ -238,8 +238,8 @@ local function boot()
         end
     end
 
-    -- ─── Remotes ──────────────────────────────────────────────────────────────
-    -- Ported verbatim from the working backup instakill (maintt.lua).
+
+
     local killAllRemote = nil
     local loadoutRemote = nil
     local refillActive  = false
@@ -299,11 +299,11 @@ local function boot()
         if not isRemote(loadoutRemote) then loadoutRemote = findLoadoutRemote() end
         return killAllRemote, loadoutRemote
     end
-    local resolveRemotes = resolveKillAllRemotes -- alias used by auto-stomp
+    local resolveRemotes = resolveKillAllRemotes
 
-    -- ─── Kill core (backup port) ───────────────────────────────────────────────
-    -- Any gun works. Prefer the one already in hand (no swap = consistent);
-    -- Tactical is the best multi-target so it wins as a backpack pick.
+
+
+
     local GUN_PRIORITY = { "[TacticalShotgun]", "[Double-Barrel SG]", "[Revolver]" }
 
     local function isUsableGun(item)
@@ -319,7 +319,7 @@ local function boot()
         return nil
     end
 
-    -- Returns tool, wasEquipped
+
     local function getBestGun(character, backpack)
         local eq = getEquippedGun(character)
         if eq then return eq, true end
@@ -502,8 +502,8 @@ local function boot()
         local damage = damageObject and (tonumber(damageObject.Value) or 50) or 50
         local humanoid = getHumanoid()
 
-        -- Equip only if empty-handed, then LEAVE it equipped afterwards. No
-        -- unequip / loadout-swap, which is what glitched the player's own gun.
+
+
         if not wasEquipped then
             if not equipKillTool(tool, character, humanoid) then
                 S.killAllStatus = "equip failed"
@@ -527,7 +527,7 @@ local function boot()
             if shot < burst then task.wait(SHOT_DELAY) end
         end
 
-        -- Keep the player's own gun ready to shoot.
+
         clearGunState(tool)
 
         S.killAllStatus = (label and (label .. ": ") or "") .. "fired " .. tostring(fired) .. "x / " .. tostring(targetCount) .. " target(s)"
@@ -535,8 +535,8 @@ local function boot()
     end
 
     local function killPlayers(targetPlayers, label, _isRetry, light)
-        -- Timestamp-based lock that auto-expires, so a leaked flag can never
-        -- permanently wedge kill (this was the "kill all works once" bug).
+
+
         if not _isRetry then
             if S.killInProgress and (tick() - (S.killInProgressAt or 0)) < 2 then
                 S.killAllStatus = "already firing"
@@ -545,17 +545,17 @@ local function boot()
             S.killInProgress = true
             S.killInProgressAt = tick()
         end
-        -- Auto (looping) modes fire a single burst and skip the retry pass; the
-        -- loop itself retries next cycle. This avoids the mass-damage remote
-        -- spam that trips anticheat / kicks the client when auto-killing.
+
+
+
         local burst = light and 1 or SHOT_BURST
         local ok, result = pcall(function() return runKillPlayers(targetPlayers, label, burst) end)
         if not _isRetry then S.killInProgress = false end
         if not ok then S.killAllStatus = "kill error"; return false end
 
-        -- Retry pass fires directly; runKillPlayers' own cooldown guard prevents
-        -- overlap, so it must NOT touch the shared killInProgress flag (that was
-        -- how the flag leaked true and blocked all later kills).
+
+
+
         if result and not _isRetry and not light then
             local retryTargets = targetPlayers
             local retryLabel = label
@@ -601,26 +601,26 @@ local function boot()
         return killPlayers(targets, "all-except")
     end
 
-    -- Expose for keybinds / external calls / debugging.
+
     S.killAll       = killAll
     S.killSelected  = killSelected
     S.killAllExcept = killAllExcept
 
-    -- ─── Auto stomp ──────────────────────────────────────────────────────────
-    -- Is this character currently KO'd (down, stompable)?
+
+
     local function koState(char)
         local be = char and char:FindFirstChild("BodyEffects")
         local ko = be and be:FindFirstChild("K.O")
         return ko ~= nil and ko.Value == true
     end
 
-    -- Teleport onto a KO'd body and stomp until it actually goes down. If
-    -- `retreat` is set, then rocket straight up out of gun range and hold, so
-    -- nobody can shoot you during the exposed stomp moment (single-target mode).
-    -- In kill-all-stomp mode everyone is already dead, so no retreat is needed.
-    -- Whole body is pcall-wrapped with a GUARANTEED reset of stompInProgress —
-    -- a leaked flag permanently blocked every future stomp (that was the "stomp
-    -- stopped working" bug). Choke point: one stomp at a time.
+
+
+
+
+
+
+
     local function doStomp(targetPlayer, retreat, maxAttempts)
         if S.stompInProgress then return end
         if not targetPlayer then return end
@@ -637,29 +637,29 @@ local function boot()
                 local myRoot     = getRoot()
                 if not targetRoot or not myRoot then break end
 
-                -- Already finished (dead / respawned / no longer KO'd)? Done.
+
                 if not koState(char) then break end
 
-                -- Teleport directly above the KO'd body (server raycasts down)
+
                 local tp = targetRoot.Position
                 pcall(function()
                     myRoot.CFrame = CFrame.new(tp.X, tp.Y + 3, tp.Z)
                 end)
-                task.wait(0.18) -- give server time to receive updated position
+                task.wait(0.18)
 
                 if remote then pcall(function() remote:FireServer("Stomp") end) end
 
-                -- Single-stomp mode: fire once and immediately move to the next
-                -- victim (no confirm wait). Used by kill-all + stomp.
+
+
                 if maxAttempts <= 1 then task.wait(0.08) break end
 
-                task.wait(0.5)  -- multi-attempt: let the stomp register
-                -- Confirm the target is actually stomped before we leave.
+                task.wait(0.5)
+
                 if not koState(targetPlayer.Character) then break end
             end
 
-            -- Retreat: shoot straight up, past any gun's range, and pin there a
-            -- moment so no one can hit you. Then release (you drop back down).
+
+
             if retreat then
                 local myRoot = getRoot()
                 if myRoot then
@@ -679,9 +679,9 @@ local function boot()
         if not ok then S.killAllStatus = "stomp err: " .. tostring(err) end
     end
 
-    -- ─── Auto kill loop ───────────────────────────────────────────────────────
-    -- Whole body wrapped in pcall so a transient error can never freeze or stop
-    -- the loop (a stuck loop with no yield is what crashes the client).
+
+
+
     local function capTargets(list)
         if AUTO_MAX_TARGETS <= 0 or #list <= AUTO_MAX_TARGETS then return list end
         local out = {}
@@ -689,7 +689,7 @@ local function boot()
         return out
     end
 
-    -- State of the selected target: is the character alive / KO'd right now?
+
     local function targetState(char)
         local hum = char and (char:FindFirstChild("Humanoid") or char:FindFirstChildOfClass("Humanoid"))
         local be  = char and char:FindFirstChild("BodyEffects")
@@ -700,21 +700,21 @@ local function boot()
     end
 
     task.spawn(function()
-        local lastMassAt    = 0    -- kill throttle for all/sight modes
-        local lastTgtKillAt = 0    -- kill throttle for the selected target
-        local lastStompAt   = 0    -- stomp retry throttle
+        local lastMassAt    = 0
+        local lastTgtKillAt = 0
+        local lastStompAt   = 0
         local lastRetargetAt = 0
-        local stompedAt     = {}   -- userId -> tick of last stomp (dedup: don't
-                                   -- re-stomp the same body, hop to the next)
+        local stompedAt     = {}
+
         while S.running do
             local ok, err = pcall(function()
                 local now = tick()
 
                 if S.autoKillTarget then
-                    -- Continuous cycle on exactly ONE target: kill while up,
-                    -- stomp while KO'd, re-kill the instant it respawns. Only
-                    -- retarget if the selected player LEFT the game (not on
-                    -- death) — otherwise it would hop and kill everyone.
+
+
+
+
                     local p = getSelectedPlayer()
                     if not p then
                         if S.autoRetarget and now - lastRetargetAt >= 1 then
@@ -724,46 +724,46 @@ local function boot()
                     else
                         local alive, koed = targetState(p.Character)
                         if koed then
-                            -- retry stomp while down (first attempt can miss)
+
                             if S.autoStomp and not S.stompInProgress and now - lastStompAt >= 0.6 then
                                 lastStompAt = now
-                                task.spawn(function() doStomp(p, true) end) -- retreat to sky after
+                                task.spawn(function() doStomp(p, true) end)
                             end
                         elseif alive then
                             if now - lastTgtKillAt >= 0.35 then
                                 lastTgtKillAt = now
-                                killPlayers({ p }, "auto", false, false) -- full burst = faster KO
+                                killPlayers({ p }, "auto", false, false)
                             end
                         end
                     end
 
                 elseif S.autoKillAllStomp then
-                    -- Stomp any downed body: ONE confirmed stomp, then move
-                    -- straight to the next victim. Serialized by stompInProgress
-                    -- (can't teleport two places at once). No sky retreat here —
-                    -- everyone is dead/down so nobody can shoot you anyway.
+
+
+
+
                     if not S.stompInProgress and now - lastStompAt >= 0.15 then
                         for _, p in ipairs(getKillCandidates()) do
                             local _, koed = targetState(p.Character)
                             local uid = tonumber(p.UserId)
-                            -- Skip anyone stomped in the last 4s. Without this
-                            -- you keep re-stomping the SAME nearest body (you're
-                            -- standing on them) instead of moving on — that
-                            -- same-spot teleport spam is what crashed you.
+
+
+
+
                             local recent = uid and stompedAt[uid] and now - stompedAt[uid] < 4
                             if koed and not recent then
                                 lastStompAt = now
                                 if uid then stompedAt[uid] = now end
                                 local victim = p
-                                task.spawn(function() doStomp(victim, false, 1) end) -- one quick stomp
+                                task.spawn(function() doStomp(victim, false, 1) end)
                                 break
                             end
                         end
                     end
-                    -- Down everyone: capped to nearest AUTO_MAX_TARGETS (anticheat
-                    -- safe) but FULL burst so they actually go down (the old
-                    -- light single-shot barely tickled them). Covers the rest
-                    -- over the next cycles as they come into range.
+
+
+
+
                     if now - lastMassAt >= S.autoKillInterval then
                         lastMassAt = now
                         killPlayers(capTargets(getKillCandidates()), "all-stomp")
@@ -797,20 +797,20 @@ local function boot()
         end
     end)
 
-    -- ─── Input ────────────────────────────────────────────────────────────────
+
     local UIS         = game:GetService("UserInputService")
     local RunService  = game:GetService("RunService")
     local scrollConn  = nil
     local hotkeyConn  = nil
     local moveConn    = nil
     local lastScrollAt = 0
-    -- The UI lib grabs ALL input while the window is open (free cursor so you can
-    -- click), which kills WASD movement. We track that "captured" state and drive
-    -- movement ourselves so you can walk AND click at the same time.
+
+
+
     local gameInputCaptured = false
 
-    -- Wrap setrobloxinput so we know when the menu is holding input. toGame==false
-    -- means the menu captured it (game movement is off) → our driver takes over.
+
+
     pcall(function()
         local realSet = setrobloxinput
         if type(realSet) == "function" then
@@ -822,10 +822,10 @@ local function boot()
         end
     end)
 
-    -- Manual movement driver (Matcha: Humanoid:Move is unbound, so we set
-    -- AssemblyLinearVelocity directly). Only runs while the menu has input;
-    -- otherwise the game moves you normally. W/A/S/D relative to the camera,
-    -- Space to jump. Whole body pcall'd so a bad frame can't spam errors.
+
+
+
+
     if type(iskeypressed) == "function" then
         moveConn = RunService.Heartbeat:Connect(function()
             if not S.running or not gameInputCaptured then return end
@@ -843,16 +843,16 @@ local function boot()
                 right = Vector3.new(right.X, 0, right.Z)
 
                 local dir = Vector3.new(0, 0, 0)
-                if iskeypressed(0x57) then dir = dir + look  end -- W
-                if iskeypressed(0x53) then dir = dir - look  end -- S
-                if iskeypressed(0x44) then dir = dir + right end -- D
-                if iskeypressed(0x41) then dir = dir - right end -- A
+                if iskeypressed(0x57) then dir = dir + look  end
+                if iskeypressed(0x53) then dir = dir - look  end
+                if iskeypressed(0x44) then dir = dir + right end
+                if iskeypressed(0x41) then dir = dir - right end
 
                 local ws = 16
                 pcall(function() ws = tonumber(hum.WalkSpeed) or 16 end)
                 local v  = hrp.AssemblyLinearVelocity
                 local yv = v.Y
-                if iskeypressed(0x20) and math.abs(yv) < 1 then yv = 50 end -- Space = jump
+                if iskeypressed(0x20) and math.abs(yv) < 1 then yv = 50 end
 
                 if dir.Magnitude > 0.05 then
                     dir = dir.Unit
@@ -881,8 +881,8 @@ local function boot()
         end)
     end)
 
-    -- Robust key match: Matcha's `input.KeyCode == Enum.KeyCode.K` can fail
-    -- (Enum comparison unsupported), so fall back to numeric/.Value/string match.
+
+
     local function keyMatches(input, keyName, fallbackCode)
         if not input then return false end
         local keyCode = nil
@@ -902,8 +902,8 @@ local function boot()
     end
 
     pcall(function()
-        -- No gameProcessedEvent gate: in Matcha `gp` is often truthy for every
-        -- key, which silently swallowed every hotkey.
+
+
         hotkeyConn = UIS.InputBegan:Connect(function(input)
             if not S.running then return end
             local focused = false
@@ -917,7 +917,7 @@ local function boot()
         end)
     end)
 
-    -- ─── People finder ────────────────────────────────────────────────────────
+
     local function clearFinder()
         for _, b in ipairs(finderButtons) do
             pcall(function()
@@ -957,7 +957,7 @@ local function boot()
         notify("People finder", shown > 0 and (shown .. " players") or "no matches", shown > 0 and "success" or "warning")
     end
 
-    -- ─── UI ───────────────────────────────────────────────────────────────────
+
     local function loadLib()
         local ok, result = pcall(function()
             return loadstring(game:HttpGet("https://raw.githubusercontent.com/neaxusxgod-png/INS-ui/main/uilib.min.lua"))()
@@ -991,9 +991,9 @@ local function boot()
             backgroundEffectColor = Color3.fromRGB(80, 170, 255),
             autoSave          = false,
             smartFps          = true,
-            gameInput         = false, -- menu captures input (free cursor = UI
-                                        -- clickable); our own driver handles WASD
-                                        -- so you can still walk while it's open
+            gameInput         = false,
+
+
             startOpen         = true,
         })
 
@@ -1006,7 +1006,7 @@ local function boot()
         local killStatus   = killTab:Section("Status",        "Right", "live state")
         handles.finderSection = killTab:Section("People Finder", "Right", "player list")
 
-        -- TARGET
+
         killControls:Divider("Target")
         handles.targetBox = killControls:Textbox("Target name", S.killTargetInput or "", function(value)
             local text = tostring(value or ""):match("^%s*(.-)%s*$")
@@ -1054,7 +1054,7 @@ local function boot()
         end)
         handles.finderSection:Info("Type name above to filter. Click player to select.")
 
-        -- FIRE
+
         killControls:Divider("Fire")
         killControls:Button("Kill selected [L]", function()
             task.spawn(function()
@@ -1075,15 +1075,15 @@ local function boot()
             end)
         end):SetRisk()
 
-        -- AUTO KILL
+
         killAuto:Divider("Auto kill mode")
-        -- Re-entrancy guard: turning one mode on switches the others off via
-        -- :Set(false). If the UI lib fires a toggle's callback on EVERY :Set
-        -- (not only on change), those reciprocal :Set(false) calls recurse into
-        -- each other → stack overflow → the client freezes the instant you
-        -- toggle. The guard makes nested sync calls no-op.
+
+
+
+
+
         local syncingModes = false
-        local function selectMode(active) -- "target" | "all" | "sight" | "allstomp" | nil
+        local function selectMode(active)
             S.autoKillTarget   = active == "target"
             S.autoKillAll      = active == "all"
             S.killOnSight      = active == "sight"
@@ -1120,7 +1120,7 @@ local function boot()
         killAuto:Toggle("Auto stomp KO'd targets", S.autoStomp, function(on)
             S.autoStomp = on and true or false
         end)
-        -- Slider(name, default, min, max, step, suffix, cb)
+
         killAuto:Slider("Kill interval", S.autoKillInterval, 0.5, 30, 0.5, "s", function(v)
             S.autoKillInterval = math.max(0.5, math.min(30, tonumber(v) or S.autoKillInterval))
         end)
@@ -1128,7 +1128,7 @@ local function boot()
             S.killOnSightRange = math.floor(tonumber(v) or S.killOnSightRange)
         end)
 
-        -- STATUS
+
         killStatus:Label(function() return "Target:   " .. tostring(S.killTargetName or "none") end)
         killStatus:Label(function() return "Status:   " .. tostring(S.killAllStatus) end)
         killStatus:Label(function()
@@ -1151,14 +1151,14 @@ local function boot()
         notify("BetterVoid", "loaded — K=kill all  L=kill selected", "success")
     end
 
-    -- ─── Unload ───────────────────────────────────────────────────────────────
+
     S.unload = function()
         S.running = false
         clearFinder()
         if scrollConn then pcall(function() scrollConn:Disconnect() end) scrollConn = nil end
         if hotkeyConn then pcall(function() hotkeyConn:Disconnect() end) hotkeyConn = nil end
         if moveConn   then pcall(function() moveConn:Disconnect()   end) moveConn   = nil end
-        -- restore the original setrobloxinput and make sure the game has input back
+
         if S._realSetInput then pcall(function() setrobloxinput = S._realSetInput end) pcall(S._realSetInput, true) end
         if win then
             pcall(function()
