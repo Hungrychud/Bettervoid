@@ -444,6 +444,9 @@ local function boot()
         local dm = mesh and mesh:FindFirstChild("Muzzle")
         pos = dm and dm.WorldPosition
         if pos then return pos end
+        if handle and tool.Name == "[TacticalShotgun]" then
+            return (handle.CFrame * CFrame.new(0, 0.25, -2.5)).Position
+        end
         return handle and handle.Position or Vector3.zero
     end
 
@@ -496,8 +499,14 @@ local function boot()
 
 
 
-        local HITS_PER_TARGET = light and 3 or 6
+        local pelletsPerShot = tool.Name == "[Revolver]" and 1 or 5
+        local cooldownObject = tool:FindFirstChild("ShootingCooldown")
+        local shotInterval = math.max(SHOT_DELAY, (cooldownObject and tonumber(cooldownObject.Value) or 0.3) + 0.02)
+        local rayParams = RaycastParams.new()
+        rayParams.FilterType = Enum.RaycastFilterType.Exclude
+        rayParams.FilterDescendantsInstances = { character }
         local fired = 0
+        local sendError
         for shot = 1, burst do
             handle = tool:FindFirstChild("Handle")
             if not handle then break end
@@ -506,24 +515,35 @@ local function boot()
             local muzzlePos = muzzleWorldPos(tool, handle)
             for _, head in ipairs(shotHits) do
                 if head and head.Parent then
-                    for _ = 1, HITS_PER_TARGET do
-                        local hitPos = head.Position
-                        local normal = muzzlePos - hitPos
-                        normal = normal.Magnitude > 0 and normal.Unit or Vector3.yAxis
-                        local okFire = pcall(function()
-                            remote:FireServer("backdoor", handle, muzzlePos, nil, head, hitPos, normal, range, damage)
+                    local direction = head.Position - muzzlePos
+                    if direction.Magnitude > 0 then
+                        local aimPosition = muzzlePos + direction.Unit * range
+                        local pellets = {}
+                        for pellet = 1, pelletsPerShot do
+                            local hit = workspace:Raycast(muzzlePos, direction.Unit * range, rayParams)
+                            pellets[pellet] = {
+                                AimPosition = aimPosition,
+                                Result1 = hit and hit.Instance or nil,
+                                Result2 = hit and hit.Position or aimPosition,
+                                Result3 = hit and hit.Normal or nil,
+                            }
+                        end
+                        local okFire, err = pcall(function()
+                            remote:FireServer("ShootGun", handle, muzzlePos, pellets, nil, nil, nil, range, damage)
                         end)
-                        if okFire then fired = fired + 1 end
+                        if okFire then fired = fired + 1 else sendError = tostring(err) end
+                        task.wait(shotInterval)
                     end
                 end
             end
-            if shot < burst then task.wait(SHOT_DELAY) end
         end
 
 
-        clearGunState(tool)
+        -- Let the game own ammo and reload state; changing local values cannot
+        -- confirm server damage and can desynchronize manual shooting.
 
-        S.killAllStatus = (label and (label .. ": ") or "") .. "fired " .. tostring(fired) .. "x / " .. tostring(targetCount) .. " target(s)"
+        S.killAllStatus = (label and (label .. ": ") or "") .. "sent " .. tostring(fired) .. " shot request(s); hits unconfirmed"
+        if sendError then S.killAllStatus = S.killAllStatus .. "; error: " .. sendError end
         return fired > 0
     end
 
