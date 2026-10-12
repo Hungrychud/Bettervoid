@@ -259,6 +259,10 @@ local function boot()
         return okName and fullName or tostring(object)
     end
 
+    local function sameInstance(a, b)
+        return a ~= nil and b ~= nil and instanceKey(a) == instanceKey(b)
+    end
+
     local function findKillRemote()
         local storage = game:GetService("ReplicatedStorage")
         local gameRemotes = storage and storage:FindFirstChild("GameRemotes")
@@ -360,7 +364,7 @@ local function boot()
                 for _, item in ipairs(container:GetChildren()) do
                     if item.ClassName == "Tool" and GUN_NAMES[item.Name] then
                         oldTools[instanceKey(item)] = item
-                        if item.Parent == character then equippedTools[item.Name] = true end
+                        if sameInstance(item.Parent, character) then equippedTools[item.Name] = true end
                     end
                 end
             end
@@ -389,7 +393,7 @@ local function boot()
         for name, item in pairs(newestTools) do
             if equippedTools[name] and character and item.Parent then
                 local equipped = false
-                if humanoid then equipped = pcall(function() humanoid:EquipTool(item) end) end
+                if humanoid and type(humanoid.EquipTool) == "function" then equipped = pcall(function() humanoid:EquipTool(item) end) end
                 if not equipped then pcall(function() item.Parent = character end) end
             end
         end
@@ -401,12 +405,12 @@ local function boot()
 
     local function equipKillTool(tool, character, humanoid)
         if not tool or not character then return false end
-        if tool.Parent == character then return true end
+        if sameInstance(tool.Parent, character) then return true end
         local equipped = false
-        if humanoid then equipped = pcall(function() humanoid:EquipTool(tool) end) end
+        if humanoid and type(humanoid.EquipTool) == "function" then equipped = pcall(function() humanoid:EquipTool(tool) end) end
         if not equipped then equipped = pcall(function() tool.Parent = character end) end
         if equipped then task.wait(EQUIP_DELAY) end
-        return tool.Parent == character
+        return sameInstance(tool.Parent, character)
     end
 
 
@@ -433,11 +437,13 @@ local function boot()
 
     local function muzzleWorldPos(tool, handle)
         local m = handle and handle:FindFirstChild("Muzzle")
-        if m then return m.WorldPosition end
+        local pos = m and m.WorldPosition
+        if pos then return pos end
         local mesh = tool:FindFirstChild("Default")
         mesh = mesh and mesh:FindFirstChild("Mesh")
         local dm = mesh and mesh:FindFirstChild("Muzzle")
-        if dm then return dm.WorldPosition end
+        pos = dm and dm.WorldPosition
+        if pos then return pos end
         return handle and handle.Position or Vector3.zero
     end
 
@@ -538,7 +544,11 @@ local function boot()
         local burst = light and 1 or SHOT_BURST
         local ok, result = pcall(function() return runKillPlayers(targetPlayers, label, burst) end)
         if not _isRetry then S.killInProgress = false end
-        if not ok then S.killAllStatus = "kill error"; return false end
+        if not ok then
+            S.killAllStatus = "kill error: " .. tostring(result)
+            warn("BetterVoid: " .. S.killAllStatus)
+            return false
+        end
 
 
 
@@ -1288,11 +1298,8 @@ local function boot()
     local AIM_MAX_PX = 350
 
     local function projectToScreen(cam, pos)
-        if type(WorldToScreen) == "function" then
-            local sp, onScreen
-            local ok = pcall(function() sp, onScreen = WorldToScreen(pos) end)
-            if ok and sp then return sp.X, sp.Y, onScreen == true end
-        end
+        -- Matcha's WorldToScreen only works in render callbacks. Aim selection
+        -- also runs in tasks, so calculate camera projection in either context.
         local vp = cam.ViewportSize
         if not vp or vp.X == 0 then return nil end
         local cs    = cam.CFrame:PointToObjectSpace(pos)
@@ -1738,4 +1745,10 @@ local function boot()
     end
 end
 
-task.spawn(boot)
+task.spawn(function()
+    local ok, err = pcall(boot)
+    if not ok then
+        warn("BetterVoid: startup failed: " .. tostring(err))
+        if _G.BV then _G.BV.killAllStatus = "startup error: " .. tostring(err) end
+    end
+end)
