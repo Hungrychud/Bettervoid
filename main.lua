@@ -451,102 +451,53 @@ local function boot()
     end
 
     local function runKillPlayers(targetPlayers, label, burst)
-        burst = burst or SHOT_BURST
-        local now = tick()
-        if now - (S.lastKillAllAt or 0) < S.killAllCooldown then
-            S.killAllStatus = "cooldown"
-            return false
-        end
-        S.lastKillAllAt = now
-
         local remote = resolveRemotes()
-        local backpack, character = getGunContainers()
-        if not remote then S.killAllStatus = "kill remote missing"; return false end
-        if not character or not backpack then S.killAllStatus = "character missing"; return false end
-
-        local tool, wasEquipped = getBestGun(character, backpack)
-        if not tool then
-            requestLoadout()
-            S.killAllStatus = "no gun (loadout requested)"
+        local _, character = getGunContainers()
+        local tool = character and getEquippedGun(character)
+        local root = character and character:FindFirstChild("HumanoidRootPart")
+        if not remote or not tool or not root then
+            S.killAllStatus = "direct shot: remote or equipped gun missing"
             return false
         end
-
-        local hits, targetCount = buildKillHits(targetPlayers)
-        if #hits == 0 then
-            S.killAllStatus = label and (label .. ": no targets") or "no targets"
-            return false
-        end
-
-        local rangeObject = tool:FindFirstChild("Range")
-        local damageObject = tool:FindFirstChild("Damage")
-        local range = rangeObject and (tonumber(rangeObject.Value) or 200) or 200
-        local damage = damageObject and (tonumber(damageObject.Value) or 50) or 50
-        local humanoid = getHumanoid()
-
-
-
-        if not wasEquipped then
-            if not equipKillTool(tool, character, humanoid) then
-                S.killAllStatus = "equip failed"
-                return false
-            end
-        end
-
         local handle = tool:FindFirstChild("Handle")
-        if not handle then S.killAllStatus = "handle missing"; return false end
-
-
-
-
-
+        local rangeValue = tool:FindFirstChild("Range")
+        local damageValue = tool:FindFirstChild("Damage")
+        local range = rangeValue and tonumber(rangeValue.Value) or 95
+        local damage = damageValue and tonumber(damageValue.Value) or 50
+        if not handle then S.killAllStatus = "direct shot: handle missing"; return false end
+        local origin = muzzleWorldPos(tool, handle)
         local pelletsPerShot = tool.Name == "[Revolver]" and 1 or 5
-        local cooldownObject = tool:FindFirstChild("ShootingCooldown")
-        local shotInterval = math.max(SHOT_DELAY, (cooldownObject and tonumber(cooldownObject.Value) or 0.3) + 0.02)
-        local rayParams = RaycastParams.new()
-        rayParams.FilterType = Enum.RaycastFilterType.Exclude
-        rayParams.FilterDescendantsInstances = { character }
-        local fired = 0
+        local sent, skipped = 0, 0
         local sendError
-        for shot = 1, burst do
-            handle = tool:FindFirstChild("Handle")
-            if not handle then break end
-            local shotHits = shot == 1 and hits or buildKillHits(targetPlayers)
-            if #shotHits == 0 then break end
-            local muzzlePos = muzzleWorldPos(tool, handle)
-            for _, head in ipairs(shotHits) do
-                if head and head.Parent then
-                    local direction = head.Position - muzzlePos
-                    if direction.Magnitude > 0 then
-                        local aimPosition = muzzlePos + direction.Unit * range
-                        local pellets = {}
-                        for pellet = 1, pelletsPerShot do
-                            local hit = workspace:Raycast(muzzlePos, direction.Unit * range, rayParams)
-                            pellets[pellet] = {
-                                AimPosition = aimPosition,
-                                Result1 = hit and hit.Instance or nil,
-                                Result2 = hit and hit.Position or aimPosition,
-                                Result3 = hit and hit.Normal or nil,
-                            }
-                        end
-                        local okFire, err = pcall(function()
-                            remote:FireServer("ShootGun", handle, muzzlePos, pellets, nil, nil, nil, range, damage)
-                        end)
-                        if okFire then fired = fired + 1 else sendError = tostring(err) end
-                        task.wait(shotInterval)
+        for _, player in ipairs(targetPlayers or {}) do
+            if not S.running then break end
+            local target, valid = getKillTarget(player)
+            local head = target and target:FindFirstChild("Head")
+            if valid and head and (head.Position - root.Position).Magnitude <= range then
+                local delta = head.Position - origin
+                if delta.Magnitude > 0 then
+                    local packets = {}
+                    for pellet = 1, pelletsPerShot do
+                        packets[pellet] = {
+                            AimPosition = origin + delta.Unit * range,
+                            Result1 = head,
+                            Result2 = head.Position,
+                            Result3 = -delta.Unit,
+                        }
                     end
+                    local ok, err = pcall(function()
+                        remote:FireServer("ShootGun", handle, origin, packets, nil, nil, nil, range, damage)
+                    end)
+                    if ok then sent = sent + 1 else sendError = tostring(err) end
                 end
+            else
+                skipped = skipped + 1
             end
         end
-
-
-        -- Let the game own ammo and reload state; changing local values cannot
-        -- confirm server damage and can desynchronize manual shooting.
-
-        S.killAllStatus = (label and (label .. ": ") or "") .. "sent " .. tostring(fired) .. " shot request(s); hits unconfirmed"
-        if sendError then S.killAllStatus = S.killAllStatus .. "; error: " .. sendError end
-        return fired > 0
+        S.killAllStatus = (label and (label .. ": ") or "") .. "direct requests " .. sent .. "; skipped " .. skipped .. "; damage unconfirmed"
+        if sendError then S.killAllStatus = S.killAllStatus .. "; " .. sendError end
+        return sent > 0
     end
-
     local function killPlayers(targetPlayers, label, _isRetry, light)
 
 
@@ -673,33 +624,8 @@ local function boot()
 
 
     local function smartKill(victims, label, light, keepArmed)
-        local _, character = getGunContainers()
-        local selfEquipped = false
-        if not (character and getEquippedGun(character)) then
-            if S.killInProgress and (tick() - (S.killInProgressAt or 0)) < 3 then
-                S.killAllStatus = "already firing"; return false
-            end
-            S.killInProgress = true; S.killInProgressAt = tick()
-            local g = nil
-            pcall(function() g = realEquipGun() end)
-            selfEquipped = g ~= nil
-            S.killInProgress = false
-
-
-
-
-            if not selfEquipped then
-                S.killAllStatus = (label and (label .. ": ") or "") .. "equip failed (focus window)"
-                return false
-            end
-        end
-        local res = killPlayers(victims, label, false, light)
-
-
-        if selfEquipped and not keepArmed then quickUnequip(S._equipSlot, light) end
-        return res
+        return killPlayers(victims, label, false, light)
     end
-
     local function killAll()
         return smartKill(capTargets(getKillCandidates()), "all")
     end
@@ -1103,28 +1029,31 @@ local function boot()
 
 
     local ARMOR_PAD_NAME = "[Full Armor]"
-    local armorPadCache  = nil
 
 
+    -- nearest Full Armor pad to the player; returns pad, ClickDetector, Head part
     local function getArmorPad()
-        if armorPadCache and armorPadCache.Parent then
-            local cd = armorPadCache:FindFirstChildOfClass("ClickDetector")
-            if cd then return armorPadCache, cd end
-        end
-        armorPadCache = nil
+        local root = getRoot()
         local shop
         pcall(function()
             local ignored = workspace:FindFirstChild("Ignored")
             shop = ignored and ignored:FindFirstChild("Shop")
         end)
         if not shop then return nil end
+        local bestPad, bestCD, bestHead, bestD
         for _, m in ipairs(shop:GetChildren()) do
             if string.sub(m.Name, 1, #ARMOR_PAD_NAME) == ARMOR_PAD_NAME then
-                local cd = m:FindFirstChildOfClass("ClickDetector")
-                if cd then armorPadCache = m; return m, cd end
+                local cd   = m:FindFirstChildOfClass("ClickDetector")
+                local head = m:FindFirstChild("Head")
+                if cd and head then
+                    local d = root and (head.Position - root.Position).Magnitude or 0
+                    if not bestD or d < bestD then
+                        bestPad, bestCD, bestHead, bestD = m, cd, head, d
+                    end
+                end
             end
         end
-        return nil
+        return bestPad, bestCD, bestHead
     end
 
 
@@ -1151,36 +1080,29 @@ local function boot()
         armorBuyBusy = true
         local ok = false
         pcall(function()
-            local pad, cd = getArmorPad()
-            if not cd then S.armorStatus = "no armor pad"; return end
+            local pad, cd, head = getArmorPad()
+            if not cd or not head then S.armorStatus = "no armor pad"; return end
+            if type(fireclickdetector) ~= "function" then S.armorStatus = "no fireclickdetector"; return end
             local priceObj = pad:FindFirstChild("Price")
             local price = (priceObj and tonumber(priceObj.Value)) or 3639
             if getCurrency() < price then S.armorStatus = "not enough $"; return end
-
-
-            if type(fireclickdetector) == "function" then
-                ok = pcall(function() fireclickdetector(cd) end)
-                S.armorStatus = ok and ("bought (" .. tostring(reason or "manual") .. ")")
-                                    or "fireclickdetector failed"
-                return
-            end
-
-
-
-
             local root = getRoot()
-            local head = pad:FindFirstChild("Head") or (cd.Parent and cd.Parent:FindFirstChild("Head"))
-            if not root or not head then S.armorStatus = "no click primitive"; return end
-            if type(mouse1click) ~= "function" then S.armorStatus = "no click primitive"; return end
-            local saved = root.CFrame
-            local hp = head.Position
-            pcall(function() root.CFrame = CFrame.new(hp + Vector3.new(0, 0, 6), hp) end)
+            if not root then S.armorStatus = "no root"; return end
+
+            -- server validates player proximity on MouseClick, so briefly TP onto the pad
+            local before = select(1, armorValues()) or 0
+            local saved  = root.CFrame
+            local p = head.Position
+            pcall(function() root.CFrame = CFrame.new(p.X, p.Y, p.Z + 5) end)
+            task.wait(0.08)
+            pcall(function() fireclickdetector(cd) end)
             task.wait(0.15)
-            pcall(function() mouse1click() end)
-            task.wait(0.1)
             pcall(function() root.CFrame = saved end)
-            S.armorStatus = "click-buy (fallback)"
-            ok = true
+
+            local after = select(1, armorValues()) or before
+            ok = after > before
+            local tag = tostring(reason or "manual")
+            S.armorStatus = ok and ("bought (" .. tag .. ")") or "click fired, no change"
         end)
         armorBuyBusy = false
         return ok
@@ -1198,11 +1120,11 @@ local function boot()
                 local thr = math.min(tonumber(S.armorThreshold) or 100, max)
                 if cur < thr then
                     buyArmor("auto")
-                    task.wait(0.5)
+                    task.wait(0.2)
                 end
             end)
             if not ok then S.armorStatus = "armor err: " .. tostring(err) end
-            task.wait(1)
+            task.wait(0.35)
         end
     end)
 
