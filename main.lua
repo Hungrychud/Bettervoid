@@ -465,14 +465,25 @@ local function boot()
         local range = rangeValue and tonumber(rangeValue.Value) or 95
         local damage = damageValue and tonumber(damageValue.Value) or 50
         if not handle then S.killAllStatus = "direct shot: handle missing"; return false end
-        -- use the game's own GunHandler.Shoot so the hit payload is a real raycast the server accepts
-        local GunHandler
-        pcall(function() GunHandler = require(game:GetService("ReplicatedStorage").Modules.GunHandler) end)
-        if not GunHandler or type(GunHandler.Shoot) ~= "function" then
-            S.killAllStatus = "no GunHandler module"; return false
-        end
-        local BEAM = Color3.new(1, 0.94902, 0.352941)
         local origin = muzzleWorldPos(tool, handle)
+
+        -- reproduce GunHandler.Shoot's raycast (muzzle -> target) so the hit payload is a real
+        -- surface hit the server re-validates against. Exclude our own character from the cast.
+        local rayParams = RaycastParams.new()
+        pcall(function()
+            rayParams.FilterDescendantsInstances = { character }
+            rayParams.FilterType = Enum.RaycastFilterType.Exclude
+        end)
+        local function castHit(head)
+            local dir = (head.Position - origin)
+            local mag = dir.Magnitude
+            if mag == 0 then return nil end
+            local res = workspace:Raycast(origin, dir.Unit * range, rayParams)
+            if res then return res.Instance, res.Position, res.Normal end
+            -- ray reached nothing solid within range; fall back to the head itself
+            return head, head.Position, -dir.Unit
+        end
+
         -- shotguns send a pellet array in arg4; single-shot guns send one hit in args 5/6/7 (arg4 nil)
         local isShotgun = tool:FindFirstChild("GunClientShotgun") ~= nil
         local pelletsPerShot = isShotgun and 5 or 1
@@ -490,20 +501,12 @@ local function boot()
                         if isShotgun then
                             local packets = {}
                             for pellet = 1, pelletsPerShot do
-                                local r1, r2, r3 = GunHandler.Shoot({
-                                    Shooter = character, Handle = handle,
-                                    ForcedOrigin = origin, AimPosition = aim,
-                                    BeamColor = BEAM, Range = range,
-                                })
+                                local r1, r2, r3 = castHit(head)
                                 packets[pellet] = { AimPosition = aim, Result1 = r1, Result2 = r2, Result3 = r3 }
                             end
                             remote:FireServer("ShootGun", handle, origin, packets, nil, nil, nil, range, damage)
                         else
-                            local r1, r2, r3 = GunHandler.Shoot({
-                                Shooter = character, Handle = handle,
-                                ForcedOrigin = origin, AimPosition = aim,
-                                BeamColor = BEAM, Range = range,
-                            })
+                            local r1, r2, r3 = castHit(head)
                             remote:FireServer("ShootGun", handle, origin, nil, r1, r2, r3, range, damage)
                         end
                     end)
