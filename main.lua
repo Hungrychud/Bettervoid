@@ -465,6 +465,13 @@ local function boot()
         local range = rangeValue and tonumber(rangeValue.Value) or 95
         local damage = damageValue and tonumber(damageValue.Value) or 50
         if not handle then S.killAllStatus = "direct shot: handle missing"; return false end
+        -- use the game's own GunHandler.Shoot so the hit payload is a real raycast the server accepts
+        local GunHandler
+        pcall(function() GunHandler = require(game:GetService("ReplicatedStorage").Modules.GunHandler) end)
+        if not GunHandler or type(GunHandler.Shoot) ~= "function" then
+            S.killAllStatus = "no GunHandler module"; return false
+        end
+        local BEAM = Color3.new(1, 0.94902, 0.352941)
         local origin = muzzleWorldPos(tool, handle)
         -- shotguns send a pellet array in arg4; single-shot guns send one hit in args 5/6/7 (arg4 nil)
         local isShotgun = tool:FindFirstChild("GunClientShotgun") ~= nil
@@ -478,27 +485,28 @@ local function boot()
             if valid and head and (head.Position - root.Position).Magnitude <= range then
                 local delta = head.Position - origin
                 if delta.Magnitude > 0 then
-                    local aim    = origin + delta.Unit * range
-                    local normal = -delta.Unit
-                    local ok, err
-                    if isShotgun then
-                        local packets = {}
-                        for pellet = 1, pelletsPerShot do
-                            packets[pellet] = {
-                                AimPosition = aim,
-                                Result1 = head,
-                                Result2 = head.Position,
-                                Result3 = normal,
-                            }
-                        end
-                        ok, err = pcall(function()
+                    local aim = origin + delta.Unit * range
+                    local ok, err = pcall(function()
+                        if isShotgun then
+                            local packets = {}
+                            for pellet = 1, pelletsPerShot do
+                                local r1, r2, r3 = GunHandler.Shoot({
+                                    Shooter = character, Handle = handle,
+                                    ForcedOrigin = origin, AimPosition = aim,
+                                    BeamColor = BEAM, Range = range,
+                                })
+                                packets[pellet] = { AimPosition = aim, Result1 = r1, Result2 = r2, Result3 = r3 }
+                            end
                             remote:FireServer("ShootGun", handle, origin, packets, nil, nil, nil, range, damage)
-                        end)
-                    else
-                        ok, err = pcall(function()
-                            remote:FireServer("ShootGun", handle, origin, nil, head, head.Position, normal, range, damage)
-                        end)
-                    end
+                        else
+                            local r1, r2, r3 = GunHandler.Shoot({
+                                Shooter = character, Handle = handle,
+                                ForcedOrigin = origin, AimPosition = aim,
+                                BeamColor = BEAM, Range = range,
+                            })
+                            remote:FireServer("ShootGun", handle, origin, nil, r1, r2, r3, range, damage)
+                        end
+                    end)
                     if ok then sent = sent + 1 else sendError = tostring(err) end
                 end
             else
