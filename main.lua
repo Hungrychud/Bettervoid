@@ -466,7 +466,9 @@ local function boot()
         local damage = damageValue and tonumber(damageValue.Value) or 50
         if not handle then S.killAllStatus = "direct shot: handle missing"; return false end
         local origin = muzzleWorldPos(tool, handle)
-        local pelletsPerShot = tool.Name == "[Revolver]" and 1 or 5
+        -- shotguns send a pellet array in arg4; single-shot guns send one hit in args 5/6/7 (arg4 nil)
+        local isShotgun = tool:FindFirstChild("GunClientShotgun") ~= nil
+        local pelletsPerShot = isShotgun and 5 or 1
         local sent, skipped = 0, 0
         local sendError
         for _, player in ipairs(targetPlayers or {}) do
@@ -476,18 +478,27 @@ local function boot()
             if valid and head and (head.Position - root.Position).Magnitude <= range then
                 local delta = head.Position - origin
                 if delta.Magnitude > 0 then
-                    local packets = {}
-                    for pellet = 1, pelletsPerShot do
-                        packets[pellet] = {
-                            AimPosition = origin + delta.Unit * range,
-                            Result1 = head,
-                            Result2 = head.Position,
-                            Result3 = -delta.Unit,
-                        }
+                    local aim    = origin + delta.Unit * range
+                    local normal = -delta.Unit
+                    local ok, err
+                    if isShotgun then
+                        local packets = {}
+                        for pellet = 1, pelletsPerShot do
+                            packets[pellet] = {
+                                AimPosition = aim,
+                                Result1 = head,
+                                Result2 = head.Position,
+                                Result3 = normal,
+                            }
+                        end
+                        ok, err = pcall(function()
+                            remote:FireServer("ShootGun", handle, origin, packets, nil, nil, nil, range, damage)
+                        end)
+                    else
+                        ok, err = pcall(function()
+                            remote:FireServer("ShootGun", handle, origin, nil, head, head.Position, normal, range, damage)
+                        end)
                     end
-                    local ok, err = pcall(function()
-                        remote:FireServer("ShootGun", handle, origin, packets, nil, nil, nil, range, damage)
-                    end)
                     if ok then sent = sent + 1 else sendError = tostring(err) end
                 end
             else
